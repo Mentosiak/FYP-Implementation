@@ -1,5 +1,5 @@
 # Base image with CUDA + cuDNN (adjust versions to your driver)
-FROM nvidia/cuda:12.4.0-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
 
 # Non-interactive mode
 ENV DEBIAN_FRONTEND=noninteractive

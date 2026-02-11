@@ -3,12 +3,13 @@ Main script for supervised learning baseline on CIFAR-10.
 This is Sprint 1: Basic supervised training loop.
 """
 
-import torch
 import argparse
+from datetime import datetime
+
 from src.data import get_cifar10_loaders
 from src.models import ResNet18, WideResNet
 from src.training import SupervisedTrainer
-from src.utils import set_seed, count_parameters, get_device
+from src.utils import set_seed, count_parameters, get_device, get_logger
 
 
 def parse_args():
@@ -46,6 +47,11 @@ def parse_args():
                         help='Random seed')
     parser.add_argument('--num-workers', type=int, default=2,
                         help='Number of data loading workers')
+
+    parser.add_argument('--checkpoint-dir', type=str, default='./checkpoints',
+                        help='Directory to save model checkpoints')
+    parser.add_argument('--log-dir', type=str, default='./logs',
+                        help='Directory to save training logs')
     
     return parser.parse_args()
 
@@ -56,41 +62,47 @@ def main():
     
     # Set random seed
     set_seed(args.seed)
+
+    run_name = f"{args.dataset}_{args.model}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    logger = get_logger(run_name, log_dir=args.log_dir)
     
     # Get device
     device = get_device()
     
-    print("\n" + "="*50)
-    print("SUPERVISED LEARNING - SPRINT 1")
-    print("="*50)
-    print(f"Dataset: {args.dataset.upper()}")
-    print(f"Model: {args.model}")
-    print(f"Epochs: {args.epochs}")
-    print(f"Batch Size: {args.batch_size}")
-    print(f"Learning Rate: {args.lr}")
-    print("="*50 + "\n")
+    logger.info("==================================================")
+    logger.info("SUPERVISED LEARNING - SPRINT 1")
+    logger.info("==================================================")
+    logger.info("Dataset: %s", args.dataset.upper())
+    logger.info("Model: %s", args.model)
+    logger.info("Epochs: %d", args.epochs)
+    logger.info("Batch Size: %d", args.batch_size)
+    logger.info("Learning Rate: %.4f", args.lr)
+    logger.info("Run Name: %s", run_name)
+    logger.info("==================================================")
     
     # Load data
-    print("Loading data...")
+    logger.info("Loading data...")
     if args.dataset == 'cifar10':
         train_loader, test_loader = get_cifar10_loaders(
             data_dir=args.data_dir,
             batch_size=args.batch_size,
-            num_workers=args.num_workers
+            num_workers=args.num_workers,
+            logger=logger,
         )
     else:
         from src.data import get_cifar100_loaders
         train_loader, test_loader = get_cifar100_loaders(
             data_dir=args.data_dir,
             batch_size=args.batch_size,
-            num_workers=args.num_workers
+            num_workers=args.num_workers,
+            logger=logger,
         )
-    
-    print(f"Training batches: {len(train_loader)}")
-    print(f"Test batches: {len(test_loader)}\n")
+
+    logger.info("Training batches: %d", len(train_loader))
+    logger.info("Test batches: %d", len(test_loader))
     
     # Create model
-    print("Creating model...")
+    logger.info("Creating model...")
     if args.model == 'resnet18':
         model = ResNet18(num_classes=args.num_classes)
     elif args.model == 'resnet34':
@@ -99,8 +111,8 @@ def main():
     elif args.model == 'wideresnet':
         model = WideResNet(depth=28, widen_factor=2, num_classes=args.num_classes)
     
-    print(f"Model: {args.model}")
-    print(f"Parameters: {count_parameters(model):,}\n")
+    logger.info("Model: %s", args.model)
+    logger.info("Parameters: %s", f"{count_parameters(model):,}")
     
     # Create trainer
     trainer = SupervisedTrainer(
@@ -110,18 +122,21 @@ def main():
         device=device,
         learning_rate=args.lr,
         momentum=args.momentum,
-        weight_decay=args.weight_decay
+        weight_decay=args.weight_decay,
+        checkpoint_dir=args.checkpoint_dir,
+        run_name=run_name,
+        logger=logger,
     )
     
     # Train
     history = trainer.train(num_epochs=args.epochs)
     
-    print("\n" + "="*50)
-    print("TRAINING COMPLETE")
-    print("="*50)
-    print(f"Best Test Accuracy: {max(history['test_acc']):.2f}%")
-    print(f"Final Test Accuracy: {history['test_acc'][-1]:.2f}%")
-    print("="*50)
+    logger.info("==================================================")
+    logger.info("TRAINING COMPLETE")
+    logger.info("==================================================")
+    logger.info("Best Test Accuracy: %.2f%%", max(history['test_acc']))
+    logger.info("Final Test Accuracy: %.2f%%", history['test_acc'][-1])
+    logger.info("==================================================")
 
 
 if __name__ == '__main__':
