@@ -1,7 +1,10 @@
 .venv/
+.venv*/
 __pycache__/
 *.pyc
 data/
+checkpoints/
 experiments/
+logs/
 *.log
 .ipynb_checkpoints/

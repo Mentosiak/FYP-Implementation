@@ -9,7 +9,7 @@ from datetime import datetime
 from src.data import get_cifar10_loaders
 from src.models import ResNet18, WideResNet
 from src.training import SupervisedTrainer
-from src.utils import set_seed, count_parameters, get_device, get_logger
+from src.utils import set_seed, count_parameters, get_device, get_logger, plot_training_curves
 
 
 def parse_args():
@@ -130,6 +130,7 @@ def main():
     
     # Train
     history = trainer.train(num_epochs=args.epochs)
+    plot_training_curves(history, save_dir=args.log_dir, run_name=run_name)
     
     logger.info("==================================================")
     logger.info("TRAINING COMPLETE")

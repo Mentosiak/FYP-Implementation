@@ -1,7 +1,7 @@
-# Supervised Learning Configuration for CIFAR-10
-# Full supervised baseline with all labels
+# Supervised limited-label benchmark aligned to standard CIFAR-10 SSL protocol
+# 250 total labels = 25 labels per class
 
-run_name: supervised_cifar10
+run_name: supervised_limited_cifar10_250labels
 
 dataset:
   name: cifar10
@@ -9,24 +9,27 @@ dataset:
   num_classes: 10
 
 model:
-  architecture: resnet18  # Options: resnet18, resnet34, wideresnet
+  architecture: wideresnet
   depth: 28
   widen_factor: 2
   dropout_rate: 0.0
-  
+
 training:
-  epochs: 200
-  batch_size: 128
-  learning_rate: 0.1
+  epochs: 300
+  batch_size: 64
+  learning_rate: 0.03
   momentum: 0.9
   weight_decay: 0.0005
   warmup_epochs: 0
+  validation_split: 0.0
   save_best: true
   save_last: true
 
 ssl:
   enabled: false
-  
+  labels_per_class: 25
+  seed: 42
+
 system:
   seed: 42
   num_workers: 2

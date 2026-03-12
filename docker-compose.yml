@@ -1,0 +1,124 @@
+version: '3.8'
+
+services:
+  # Quick verification test
+  verify:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: fyp-ssl:latest
+    volumes:
+      - .:/workspace
+    command: python verify_installation.py
+
+  # Quick SSL test (2 epochs)
+  test-ssl:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: fyp-ssl:latest
+    volumes:
+      - .:/workspace
+    command: python test_ssl.py
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Train supervised with limited labels
+  train-supervised-limited:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: fyp-ssl:latest
+    volumes:
+      - .:/workspace
+    command: python train_supervised_limited.py --config configs/supervised_limited_cifar10.yaml
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Train SSL Pseudo-Label
+  train-ssl:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: fyp-ssl:latest
+    volumes:
+      - .:/workspace
+    command: python train_ssl.py --config configs/ssl_pseudolabel_cifar10.yaml
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Compare SSL vs Supervised
+  compare:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: fyp-ssl:latest
+    volumes:
+      - .:/workspace
+    command: python compare_methods.py --supervised-config configs/supervised_limited_cifar10.yaml --ssl-config configs/ssl_pseudolabel_cifar10.yaml
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Full experiment workflow
+  full-experiment:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: fyp-ssl:latest
+    volumes:
+      - .:/workspace
+    command: >
+      bash -c "
+        echo '=== Step 1/3: Training Supervised (Limited Labels) ===' &&
+        python train_supervised_limited.py --config configs/supervised_limited_cifar10.yaml &&
+        echo '=== Step 2/3: Training SSL Pseudo-Label ===' &&
+        python train_ssl.py --config configs/ssl_pseudolabel_cifar10.yaml &&
+        echo '=== Step 3/3: Comparing Results ===' &&
+        python compare_methods.py --supervised-config configs/supervised_limited_cifar10.yaml --ssl-config configs/ssl_pseudolabel_cifar10.yaml
+      "
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Interactive shell for manual experiments
+  shell:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: fyp-ssl:latest
+    volumes:
+      - .:/workspace
+    stdin_open: true
+    tty: true
+    command: /bin/bash
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
