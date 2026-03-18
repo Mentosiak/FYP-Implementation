@@ -1,7 +1,7 @@
-# Semi-Supervised Learning Configuration - FixMatch (Initial Version)
+# Semi-Supervised Learning Configuration - MixMatch
 # CIFAR-10 with limited labeled data
 
-run_name: ssl_fixmatch_cifar10
+run_name: ssl_mixmatch_cifar10
 
 dataset:
   name: cifar10
@@ -28,7 +28,7 @@ training:
 
 ssl:
   enabled: true
-  algorithm: fixmatch
+  algorithm: mixmatch
   labels_per_class: 250
   label_fraction: null
   unlabeled_batch_size: 256
@@ -36,6 +36,8 @@ ssl:
   unlabeled_loss_weight: 1.0
   strong_augment: true
   temperature: 1.0
+  mixmatch_alpha: 0.75
+  mixmatch_temperature: 0.5
   seed: 42
 
 system:

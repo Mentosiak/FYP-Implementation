@@ -37,6 +37,7 @@ class TrainingConfig:
     weight_decay: float = 0.0005
     warmup_epochs: int = 0
     validation_split: float = 0.0
+    stop_loss_threshold: float | None = None
     save_best: bool = True
     save_last: bool = True
 
@@ -53,6 +54,8 @@ class SSLConfig:
     unlabeled_loss_weight: float = 1.0
     strong_augment: bool = True
     temperature: float = 1.0  # For pseudo-label sharpening
+    mixmatch_alpha: float = 0.75
+    mixmatch_temperature: float = 0.5
     seed: int = 42
 
 
@@ -146,6 +149,7 @@ class ExperimentConfig:
                 'weight_decay': self.training.weight_decay,
                 'warmup_epochs': self.training.warmup_epochs,
                 'validation_split': self.training.validation_split,
+                'stop_loss_threshold': self.training.stop_loss_threshold,
                 'save_best': self.training.save_best,
                 'save_last': self.training.save_last,
             },
@@ -159,6 +163,8 @@ class ExperimentConfig:
                 'unlabeled_loss_weight': self.ssl.unlabeled_loss_weight,
                 'strong_augment': self.ssl.strong_augment,
                 'temperature': self.ssl.temperature,
+                'mixmatch_alpha': self.ssl.mixmatch_alpha,
+                'mixmatch_temperature': self.ssl.mixmatch_temperature,
                 'seed': self.ssl.seed,
             },
             'system': {

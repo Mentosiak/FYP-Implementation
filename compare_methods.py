@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 from src.data import get_cifar_supervised_loaders, get_cifar_ssl_loaders
 from src.data.cifar import SplitConfig
 from src.models import build_model
-from src.training import SupervisedTrainer, PseudoLabelTrainer, FixMatchTrainer
+from src.training import SupervisedTrainer, PseudoLabelTrainer, FixMatchTrainer, MixMatchTrainer
 from src.utils import set_seed, get_logger, load_config, plot_per_class_comparison
 
 
@@ -92,6 +92,7 @@ def train_or_load_supervised(config, device, logger, checkpoint_dir, force_train
         save_best=config.training.save_best,
         save_last=config.training.save_last,
         num_classes=config.dataset.num_classes,
+        stop_loss_threshold=config.training.stop_loss_threshold,
     )
     
     # Load or train
@@ -160,6 +161,29 @@ def train_or_load_ssl(config, device, logger, checkpoint_dir, force_train=False)
             save_best=config.training.save_best,
             save_last=config.training.save_last,
             num_classes=config.dataset.num_classes,
+            stop_loss_threshold=config.training.stop_loss_threshold,
+        )
+    elif algorithm == 'mixmatch':
+        trainer = MixMatchTrainer(
+            model=model,
+            labeled_loader=labeled_loader,
+            unlabeled_loader=unlabeled_loader,
+            test_loader=test_loader,
+            val_loader=val_loader,
+            device=device,
+            learning_rate=config.training.learning_rate,
+            momentum=config.training.momentum,
+            weight_decay=config.training.weight_decay,
+            unlabeled_loss_weight=config.ssl.unlabeled_loss_weight,
+            mixmatch_alpha=config.ssl.mixmatch_alpha,
+            mixmatch_temperature=config.ssl.mixmatch_temperature,
+            checkpoint_dir=checkpoint_dir,
+            run_name=config.run_name,
+            logger=logger,
+            save_best=config.training.save_best,
+            save_last=config.training.save_last,
+            num_classes=config.dataset.num_classes,
+            stop_loss_threshold=config.training.stop_loss_threshold,
         )
     else:
         trainer = PseudoLabelTrainer(
@@ -181,6 +205,7 @@ def train_or_load_ssl(config, device, logger, checkpoint_dir, force_train=False)
             save_best=config.training.save_best,
             save_last=config.training.save_last,
             num_classes=config.dataset.num_classes,
+            stop_loss_threshold=config.training.stop_loss_threshold,
         )
     
     # Load or train
@@ -262,7 +287,7 @@ def main():
     
     # Train/load SSL model
     logger.info("\n" + "="*60)
-    logger.info("SEMI-SUPERVISED LEARNING (Pseudo-Label)")
+    logger.info("SEMI-SUPERVISED LEARNING (%s)", ssl_config.ssl.algorithm)
     logger.info("="*60)
     ssl_checkpoint_dir = os.path.join(
         ssl_config.system.checkpoint_dir,
@@ -292,6 +317,7 @@ def main():
         },
         'ssl': {
             'config': args.ssl_config,
+            'algorithm': ssl_config.ssl.algorithm,
             'best_test_acc': ssl_trainer.best_acc,
             'final_test_acc': ssl_history['test_acc'][-1] if ssl_history['test_acc'] else 0,
             'num_epochs': len(ssl_history['test_acc']),

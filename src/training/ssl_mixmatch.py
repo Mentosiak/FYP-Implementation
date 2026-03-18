@@ -1,11 +1,11 @@
-"""FixMatch semi-supervised trainer.
+"""MixMatch semi-supervised trainer.
 
-Initial implementation based on:
-Sohn et al. (2020) - "FixMatch: Simplifying Semi-Supervised Learning with
-Consistency and Confidence"
+Implementation inspired by:
+Berthelot et al. (2019) - "MixMatch: A Holistic Approach to Semi-Supervised Learning"
 """
 
 from __future__ import annotations
+
 import logging
 import os
 import time
@@ -13,12 +13,13 @@ import time
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
 
-class FixMatchTrainer:
-    """Initial FixMatch training loop for image classification."""
+class MixMatchTrainer:
+    """MixMatch training loop for image classification."""
 
     def __init__(
         self,
@@ -31,10 +32,11 @@ class FixMatchTrainer:
         learning_rate: float = 0.03,
         momentum: float = 0.9,
         weight_decay: float = 5e-4,
-        confidence_threshold: float = 0.95,
         unlabeled_loss_weight: float = 1.0,
+        mixmatch_alpha: float = 0.75,
+        mixmatch_temperature: float = 0.5,
         checkpoint_dir: str = 'checkpoints',
-        run_name: str = 'ssl_fixmatch',
+        run_name: str = 'ssl_mixmatch',
         logger: logging.Logger | None = None,
         save_best: bool = True,
         save_last: bool = True,
@@ -47,8 +49,9 @@ class FixMatchTrainer:
         self.test_loader = test_loader
         self.val_loader = val_loader
         self.device = device
-        self.confidence_threshold = confidence_threshold
         self.unlabeled_loss_weight = unlabeled_loss_weight
+        self.mixmatch_alpha = mixmatch_alpha
+        self.mixmatch_temperature = mixmatch_temperature
         self.checkpoint_dir = checkpoint_dir
         self.run_name = run_name
         self.logger = logger or logging.getLogger(__name__)
@@ -110,7 +113,6 @@ class FixMatchTrainer:
             raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
         self.logger.info("Loading checkpoint from %s", checkpoint_path)
-        # These checkpoints are produced by this project and include optimizer/history state.
         checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
 
         self.model.load_state_dict(checkpoint['model_state'])
@@ -131,6 +133,21 @@ class FixMatchTrainer:
         self.logger.info("Loaded checkpoint from epoch %d", checkpoint.get('epoch', 0))
         return start_epoch
 
+    def _mixup(self, inputs: torch.Tensor, targets: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.mixmatch_alpha > 0.0:
+            lam = np.random.beta(self.mixmatch_alpha, self.mixmatch_alpha)
+        else:
+            lam = 1.0
+        lam = max(lam, 1.0 - lam)
+
+        index = torch.randperm(inputs.size(0), device=inputs.device)
+        mixed_inputs = lam * inputs + (1.0 - lam) * inputs[index]
+        mixed_targets = lam * targets + (1.0 - lam) * targets[index]
+        return mixed_inputs, mixed_targets
+
+    def _soft_cross_entropy(self, logits: torch.Tensor, soft_targets: torch.Tensor) -> torch.Tensor:
+        return torch.mean(torch.sum(-soft_targets * F.log_softmax(logits, dim=1), dim=1))
+
     def train_epoch(self):
         self.model.train()
 
@@ -139,9 +156,6 @@ class FixMatchTrainer:
         total_loss_sum = 0.0
         correct = 0
         total = 0
-
-        pseudo_label_count = 0
-        unlabeled_total = 0
 
         labeled_iter = iter(self.labeled_loader)
         unlabeled_iter = iter(self.unlabeled_loader)
@@ -174,47 +188,52 @@ class FixMatchTrainer:
                     inputs_unlabeled_weak = unlabeled_batch[0].to(self.device)
                 inputs_unlabeled_strong = inputs_unlabeled_weak
 
-            self.optimizer.zero_grad()
-
-            logits_labeled = self.model(inputs_labeled)
-            loss_labeled = self.criterion(logits_labeled, targets_labeled)
-
             with torch.no_grad():
-                logits_unlabeled_weak = self.model(inputs_unlabeled_weak)
-                probs_unlabeled_weak = torch.softmax(logits_unlabeled_weak, dim=1)
-                max_probs, pseudo_labels = torch.max(probs_unlabeled_weak, dim=1)
-                confidence_mask = max_probs >= self.confidence_threshold
+                logits_weak = self.model(inputs_unlabeled_weak)
+                logits_strong = self.model(inputs_unlabeled_strong)
+                probs = (torch.softmax(logits_weak, dim=1) + torch.softmax(logits_strong, dim=1)) / 2.0
+                probs_sharpen = probs ** (1.0 / self.mixmatch_temperature)
+                targets_unlabeled = probs_sharpen / probs_sharpen.sum(dim=1, keepdim=True)
 
-            if confidence_mask.sum() > 0:
-                logits_unlabeled_strong = self.model(inputs_unlabeled_strong)
-                loss_unlabeled = self.criterion(
-                    logits_unlabeled_strong[confidence_mask],
-                    pseudo_labels[confidence_mask],
-                )
-            else:
-                loss_unlabeled = torch.tensor(0.0, device=self.device)
+            targets_labeled_onehot = F.one_hot(targets_labeled, num_classes=self.num_classes).float()
+            inputs_unlabeled = torch.cat([inputs_unlabeled_weak, inputs_unlabeled_strong], dim=0)
+            targets_unlabeled_all = torch.cat([targets_unlabeled, targets_unlabeled], dim=0)
 
+            all_inputs = torch.cat([inputs_labeled, inputs_unlabeled], dim=0)
+            all_targets = torch.cat([targets_labeled_onehot, targets_unlabeled_all], dim=0)
+
+            mixed_inputs, mixed_targets = self._mixup(all_inputs, all_targets)
+
+            logits = self.model(mixed_inputs)
+            num_labeled = inputs_labeled.size(0)
+            logits_labeled = logits[:num_labeled]
+            logits_unlabeled = logits[num_labeled:]
+            mixed_targets_labeled = mixed_targets[:num_labeled]
+            mixed_targets_unlabeled = mixed_targets[num_labeled:]
+
+            loss_labeled = self._soft_cross_entropy(logits_labeled, mixed_targets_labeled)
+            loss_unlabeled = self._soft_cross_entropy(logits_unlabeled, mixed_targets_unlabeled)
             loss = loss_labeled + self.unlabeled_loss_weight * loss_unlabeled
+
+            self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
 
             labeled_loss_sum += loss_labeled.item()
-            unlabeled_loss_sum += float(loss_unlabeled.item())
+            unlabeled_loss_sum += loss_unlabeled.item()
             total_loss_sum += loss.item()
 
-            _, predicted = logits_labeled.max(1)
-            total += targets_labeled.size(0)
-            correct += predicted.eq(targets_labeled).sum().item()
-
-            pseudo_label_count += confidence_mask.sum().item()
-            unlabeled_total += confidence_mask.size(0)
+            with torch.no_grad():
+                labeled_eval_logits = self.model(inputs_labeled)
+                _, predicted = labeled_eval_logits.max(1)
+                total += targets_labeled.size(0)
+                correct += predicted.eq(targets_labeled).sum().item()
 
         epoch_loss = total_loss_sum / num_iterations
         epoch_labeled_loss = labeled_loss_sum / num_iterations
         epoch_unlabeled_loss = unlabeled_loss_sum / num_iterations
         epoch_acc = 100.0 * correct / total
-        pseudo_ratio = pseudo_label_count / unlabeled_total if unlabeled_total > 0 else 0.0
-        return epoch_loss, epoch_labeled_loss, epoch_unlabeled_loss, epoch_acc, pseudo_ratio
+        return epoch_loss, epoch_labeled_loss, epoch_unlabeled_loss, epoch_acc, 1.0
 
     def validate(self):
         if self.val_loader is None:
@@ -269,10 +288,11 @@ class FixMatchTrainer:
 
     def train(self, num_epochs: int = 300, start_epoch: int = 0):
         self.logger.info("=" * 60)
-        self.logger.info("Starting FixMatch SSL Training")
+        self.logger.info("Starting MixMatch SSL Training")
         self.logger.info("=" * 60)
 
         last_completed_epoch = start_epoch - 1
+
         for epoch in range(start_epoch, num_epochs):
             start_time = time.time()
 
@@ -329,7 +349,7 @@ class FixMatchTrainer:
                 self.logger.info(
                     "Epoch [%d/%d] | Time: %.1fs | LR: %.6f | Train Loss: %.4f | Train Acc: %.2f%% | "
                     "Val Loss: %.4f | Val Acc: %.2f%% | Test Loss: %.4f | Test Acc: %.2f%% | "
-                    "Pseudo Ratio: %.2f%% | Best (val): %.4f",
+                    "Best (val): %.4f",
                     epoch + 1,
                     num_epochs,
                     epoch_time,
@@ -340,13 +360,12 @@ class FixMatchTrainer:
                     val_acc,
                     test_loss,
                     test_acc,
-                    pseudo_ratio * 100.0,
                     self.best_val_loss,
                 )
             else:
                 self.logger.info(
                     "Epoch [%d/%d] | Time: %.1fs | LR: %.6f | Train Loss: %.4f | Train Acc: %.2f%% | "
-                    "Test Loss: %.4f | Test Acc: %.2f%% | Pseudo Ratio: %.2f%% | Best: %.2f%%",
+                    "Test Loss: %.4f | Test Acc: %.2f%% | Best: %.2f%%",
                     epoch + 1,
                     num_epochs,
                     epoch_time,
@@ -355,7 +374,6 @@ class FixMatchTrainer:
                     train_acc,
                     test_loss,
                     test_acc,
-                    pseudo_ratio * 100.0,
                     self.best_acc,
                 )
 

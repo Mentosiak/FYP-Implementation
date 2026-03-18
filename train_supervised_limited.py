@@ -118,6 +118,7 @@ def main():
         save_best=config.training.save_best,
         save_last=config.training.save_last,
         num_classes=config.dataset.num_classes,
+        stop_loss_threshold=config.training.stop_loss_threshold,
     )
     
     # Resume from checkpoint if specified

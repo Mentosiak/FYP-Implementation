@@ -33,6 +33,7 @@ class SupervisedTrainer:
         save_best: bool = True,
         save_last: bool = True,
         num_classes: int = 10,
+        stop_loss_threshold: float | None = None,
     ):
         """
         Initialize supervised trainer.
@@ -52,6 +53,7 @@ class SupervisedTrainer:
             save_best: Whether to save best checkpoint
             save_last: Whether to save last checkpoint
             num_classes: Number of classes
+            stop_loss_threshold: Stop training when monitored loss exceeds this threshold
         """
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -64,6 +66,7 @@ class SupervisedTrainer:
         self.save_best = save_best
         self.save_last = save_last
         self.num_classes = num_classes
+        self.stop_loss_threshold = stop_loss_threshold
         
         # Loss function
         self.criterion = nn.CrossEntropyLoss()
@@ -273,6 +276,7 @@ class SupervisedTrainer:
         self.logger.info("Test batches: %d", len(self.test_loader))
         self.logger.info("="*60)
         
+        last_completed_epoch = start_epoch - 1
         for epoch in range(start_epoch, num_epochs):
             start_time = time.time()
             
@@ -300,6 +304,7 @@ class SupervisedTrainer:
             self.history['test_acc'].append(test_acc)
             self.history['per_class_acc'].append(per_class_acc)
             self.history['epoch_time'].append(epoch_time)
+            last_completed_epoch = epoch
             
             # Check if best model (prefer lowest validation loss if available)
             is_best = False
@@ -315,6 +320,20 @@ class SupervisedTrainer:
 
             if is_best:
                 self._save_checkpoint(epoch, is_best=True)
+
+            monitored_loss = val_loss if val_loss is not None else test_loss
+            if (
+                self.stop_loss_threshold is not None
+                and monitored_loss is not None
+                and monitored_loss > self.stop_loss_threshold
+            ):
+                self.logger.warning(
+                    "Stop-loss triggered at epoch %d: monitored_loss=%.4f > threshold=%.4f",
+                    epoch + 1,
+                    monitored_loss,
+                    self.stop_loss_threshold,
+                )
+                break
             
             # Logging
             current_lr = self.optimizer.param_groups[0]['lr']
@@ -349,8 +368,8 @@ class SupervisedTrainer:
                 for cls, acc in per_class_acc.items():
                     self.logger.info(f"  {cls}: {acc:.2f}%")
         
-        if self.save_last:
-            self._save_checkpoint(num_epochs - 1, is_best=False, is_last=True)
+        if self.save_last and last_completed_epoch >= start_epoch:
+            self._save_checkpoint(last_completed_epoch, is_best=False, is_last=True)
 
         self.logger.info("="*60)
         self.logger.info("Training Completed!")

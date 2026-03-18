@@ -1,7 +1,7 @@
 # Supervised Learning with Limited Labels (for fair SSL comparison)
 # Uses the same number of labels as SSL experiments (250 per class)
 
-run_name: supervised_limited_cifar10
+run_name: supervised_limited_cifar10_val
 
 dataset:
   name: cifar10
@@ -9,27 +9,25 @@ dataset:
   num_classes: 10
 
 model:
-  architecture: wideresnet  # Match SSL experiments
+  architecture: wideresnet
   depth: 28
   widen_factor: 2
   dropout_rate: 0.0
 
 training:
-  epochs: 300  # Match SSL training duration
+  epochs: 300
   batch_size: 64
   learning_rate: 0.03
   momentum: 0.9
   weight_decay: 0.0005
   warmup_epochs: 0
-  validation_split: 0.1  # Hold out 10% of labeled set for validation/model selection
-  stop_loss_threshold: null
+  validation_split: 0.1
   save_best: true
   save_last: true
 
 ssl:
   enabled: false
-  # Use SSL data loader but only train on labeled portion
-  labels_per_class: 250  # Same as SSL for fair comparison
+  labels_per_class: 250
   seed: 42
 
 system:

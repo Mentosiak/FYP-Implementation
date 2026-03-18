@@ -1,7 +1,7 @@
-# Semi-Supervised Learning Configuration - FixMatch (Initial Version)
-# CIFAR-10 with limited labeled data
+# MixMatch benchmark with validation-based stop-loss
+# 4000 total labels = 400 labels per class
 
-run_name: ssl_fixmatch_cifar10
+run_name: ssl_mixmatch_cifar10_4000labels
 
 dataset:
   name: cifar10
@@ -22,20 +22,22 @@ training:
   weight_decay: 0.0005
   warmup_epochs: 0
   validation_split: 0.1
-  stop_loss_threshold: null
+  stop_loss_threshold: 3.0
   save_best: true
   save_last: true
 
 ssl:
   enabled: true
-  algorithm: fixmatch
-  labels_per_class: 250
+  algorithm: mixmatch
+  labels_per_class: 400
   label_fraction: null
   unlabeled_batch_size: 256
   confidence_threshold: 0.95
   unlabeled_loss_weight: 1.0
   strong_augment: true
   temperature: 1.0
+  mixmatch_alpha: 0.75
+  mixmatch_temperature: 0.5
   seed: 42
 
 system:

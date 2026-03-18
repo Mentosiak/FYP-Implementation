@@ -22,6 +22,7 @@ training:
   weight_decay: 0.0005
   warmup_epochs: 0
   validation_split: 0.1  # Hold out 10% of labeled set for validation/model selection
+  stop_loss_threshold: null  # Optional safety stop on monitored loss
   save_best: true
   save_last: true
 

@@ -11,12 +11,12 @@ import torch
 from src.data import get_cifar_ssl_loaders
 from src.data.cifar import SplitConfig
 from src.models import build_model
-from src.training import PseudoLabelTrainer, FixMatchTrainer
+from src.training import PseudoLabelTrainer, FixMatchTrainer, MixMatchTrainer
 from src.utils import set_seed, get_logger, load_config, plot_training_curves
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Semi-Supervised Learning with Pseudo-Label')
+    parser = argparse.ArgumentParser(description='Semi-Supervised Learning training')
     parser.add_argument('--config', type=str, default='configs/ssl_pseudolabel_cifar10.yaml',
                         help='Path to configuration file')
     parser.add_argument('--resume', type=str, default=None,
@@ -123,6 +123,29 @@ def main():
             save_best=config.training.save_best,
             save_last=config.training.save_last,
             num_classes=config.dataset.num_classes,
+            stop_loss_threshold=config.training.stop_loss_threshold,
+        )
+    elif algorithm == 'mixmatch':
+        trainer = MixMatchTrainer(
+            model=model,
+            labeled_loader=labeled_loader,
+            unlabeled_loader=unlabeled_loader,
+            test_loader=test_loader,
+            val_loader=val_loader,
+            device=device,
+            learning_rate=config.training.learning_rate,
+            momentum=config.training.momentum,
+            weight_decay=config.training.weight_decay,
+            unlabeled_loss_weight=config.ssl.unlabeled_loss_weight,
+            mixmatch_alpha=config.ssl.mixmatch_alpha,
+            mixmatch_temperature=config.ssl.mixmatch_temperature,
+            checkpoint_dir=checkpoint_dir,
+            run_name=run_name,
+            logger=logger,
+            save_best=config.training.save_best,
+            save_last=config.training.save_last,
+            num_classes=config.dataset.num_classes,
+            stop_loss_threshold=config.training.stop_loss_threshold,
         )
     else:
         trainer = PseudoLabelTrainer(
@@ -144,6 +167,7 @@ def main():
             save_best=config.training.save_best,
             save_last=config.training.save_last,
             num_classes=config.dataset.num_classes,
+            stop_loss_threshold=config.training.stop_loss_threshold,
         )
     
     # Resume from checkpoint if specified
