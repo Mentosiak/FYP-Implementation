@@ -23,6 +23,9 @@ training:
   warmup_epochs: 0
   validation_split: 0.1  # Hold out 10% of labeled set for validation/model selection
   stop_loss_threshold: null
+  stop_loss_warmup_epochs: 12
+  supervised_algorithm: mixup
+  mixup_alpha: 0.2
   save_best: true
   save_last: true
 
@@ -39,3 +42,4 @@ system:
   checkpoint_dir: checkpoints
   log_dir: logs
   experiment_dir: experiments
+

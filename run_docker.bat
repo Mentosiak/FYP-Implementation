@@ -66,6 +66,11 @@ if "%1"=="benchmark-sweep-cpu" (
     goto :end
 )
 
+if "%1"=="cli" (
+    python train_cli_docker.py
+    goto :end
+)
+
 if "%1"=="shell" (
     echo Opening interactive Docker shell...
     docker run -it --rm --gpus all -v %cd%:/workspace fyp-ssl:latest /bin/bash
@@ -115,6 +120,7 @@ echo   compare               - Compare SSL vs Supervised ^(GPU^)
 echo   full-experiment       - Run complete experiment workflow ^(GPU^)
 echo   benchmark-sweep       - Run 250/1000/4000 label benchmark sweep ^(GPU^)
 echo   benchmark-sweep-cpu   - Run benchmark sweep without GPU
+echo   cli                   - Interactive launcher for Docker CUDA training
 echo   shell                 - Open interactive shell with GPU
 echo   shell-cpu             - Open interactive shell without GPU
 echo.

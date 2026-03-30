@@ -126,6 +126,10 @@ def main():
         checkpoint_dir=args.checkpoint_dir,
         run_name=run_name,
         logger=logger,
+        stop_loss_warmup_epochs=12,
+        supervised_algorithm='standard',
+        mixup_alpha=0.2,
+        total_epochs=args.epochs,
     )
     
     # Train

@@ -13,6 +13,7 @@
 ### Pre-Run Checklist
 - [ ] Docker Desktop installed
 - [ ] Docker Desktop running (check system tray)
+- [ ] `docker info` succeeds (daemon reachable)
 - [ ] At least 10GB free disk space
 - [ ] (Optional) NVIDIA drivers for GPU support
 
@@ -50,7 +51,9 @@
 ### Results Checklist
 - [ ] Files created in `experiments/comparison/TIMESTAMP/`
 - [ ] `comparison_results.json` exists
-- [ ] `comparison_test_acc.png` shows SSL > Supervised
+- [ ] `curves/` exists with accuracy/loss plots
+- [ ] `confusion_matrices/` exists
+- [ ] `calibration/` exists with reliability diagrams and `calibration_metrics.json`
 - [ ] Checkpoints saved in `checkpoints/`
 - [ ] Logs available in `logs/`
 
@@ -194,6 +197,14 @@ Your experiment is successful if:
 ---
 
 ## If Something Goes Wrong
+
+### Docker daemon not reachable
+1. Open Docker Desktop and wait until status is Running
+2. Verify with:
+   ```powershell
+   docker info
+   ```
+3. Retry build or run commands
 
 ### Training Fails
 1. Check logs in `logs/` directory

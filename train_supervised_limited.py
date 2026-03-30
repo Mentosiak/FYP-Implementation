@@ -119,6 +119,10 @@ def main():
         save_last=config.training.save_last,
         num_classes=config.dataset.num_classes,
         stop_loss_threshold=config.training.stop_loss_threshold,
+        stop_loss_warmup_epochs=config.training.stop_loss_warmup_epochs,
+        supervised_algorithm=config.training.supervised_algorithm,
+        mixup_alpha=config.training.mixup_alpha,
+        total_epochs=config.training.epochs,
     )
     
     # Resume from checkpoint if specified

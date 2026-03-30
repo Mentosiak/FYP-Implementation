@@ -9,13 +9,22 @@ import json
 from datetime import datetime
 
 import torch
+import numpy as np
 import matplotlib.pyplot as plt
+import torch.nn.functional as F
 
 from src.data import get_cifar_supervised_loaders, get_cifar_ssl_loaders
 from src.data.cifar import SplitConfig
 from src.models import build_model
-from src.training import SupervisedTrainer, PseudoLabelTrainer, FixMatchTrainer, MixMatchTrainer
-from src.utils import set_seed, get_logger, load_config, plot_per_class_comparison
+from src.training import SupervisedTrainer, PseudoLabelTrainer, FixMatchTrainer, MixMatchTrainer, FlexMatchTrainer
+from src.utils import (
+    set_seed,
+    get_logger,
+    load_config,
+    plot_per_class_comparison,
+    plot_confusion_matrix,
+    plot_reliability_diagram,
+)
 
 
 def plot_comparison(supervised_history, ssl_history, save_dir, metric='test_acc'):
@@ -51,6 +60,31 @@ def plot_per_class_results(supervised_history, ssl_history, save_dir):
         save_path=save_path,
     )
     print(f"Saved plot: {save_path}")
+
+
+def collect_predictions(model, data_loader, device):
+    """Collect true labels, predicted labels, and class probabilities."""
+    model.eval()
+    y_true = []
+    y_pred = []
+    y_prob = []
+
+    with torch.no_grad():
+        for inputs, targets in data_loader:
+            inputs = inputs.to(device)
+            logits = model(inputs)
+            probs = F.softmax(logits, dim=1)
+            preds = torch.argmax(probs, dim=1)
+
+            y_true.append(targets.cpu().numpy())
+            y_pred.append(preds.cpu().numpy())
+            y_prob.append(probs.cpu().numpy())
+
+    return (
+        np.concatenate(y_true, axis=0),
+        np.concatenate(y_pred, axis=0),
+        np.concatenate(y_prob, axis=0),
+    )
 
 
 def save_comparison_results(results, save_path):
@@ -93,6 +127,10 @@ def train_or_load_supervised(config, device, logger, checkpoint_dir, force_train
         save_last=config.training.save_last,
         num_classes=config.dataset.num_classes,
         stop_loss_threshold=config.training.stop_loss_threshold,
+        stop_loss_warmup_epochs=config.training.stop_loss_warmup_epochs,
+        supervised_algorithm=config.training.supervised_algorithm,
+        mixup_alpha=config.training.mixup_alpha,
+        total_epochs=config.training.epochs,
     )
     
     # Load or train
@@ -162,6 +200,8 @@ def train_or_load_ssl(config, device, logger, checkpoint_dir, force_train=False)
             save_last=config.training.save_last,
             num_classes=config.dataset.num_classes,
             stop_loss_threshold=config.training.stop_loss_threshold,
+            stop_loss_warmup_epochs=config.training.stop_loss_warmup_epochs,
+            total_epochs=config.training.epochs,
         )
     elif algorithm == 'mixmatch':
         trainer = MixMatchTrainer(
@@ -184,6 +224,32 @@ def train_or_load_ssl(config, device, logger, checkpoint_dir, force_train=False)
             save_last=config.training.save_last,
             num_classes=config.dataset.num_classes,
             stop_loss_threshold=config.training.stop_loss_threshold,
+            stop_loss_warmup_epochs=config.training.stop_loss_warmup_epochs,
+            total_epochs=config.training.epochs,
+        )
+    elif algorithm == 'flexmatch':
+        trainer = FlexMatchTrainer(
+            model=model,
+            labeled_loader=labeled_loader,
+            unlabeled_loader=unlabeled_loader,
+            test_loader=test_loader,
+            val_loader=val_loader,
+            device=device,
+            learning_rate=config.training.learning_rate,
+            momentum=config.training.momentum,
+            weight_decay=config.training.weight_decay,
+            confidence_threshold=config.ssl.confidence_threshold,
+            unlabeled_loss_weight=config.ssl.unlabeled_loss_weight,
+            temperature=config.ssl.temperature,
+            checkpoint_dir=checkpoint_dir,
+            run_name=config.run_name,
+            logger=logger,
+            save_best=config.training.save_best,
+            save_last=config.training.save_last,
+            num_classes=config.dataset.num_classes,
+            stop_loss_threshold=config.training.stop_loss_threshold,
+            stop_loss_warmup_epochs=config.training.stop_loss_warmup_epochs,
+            total_epochs=config.training.epochs,
         )
     else:
         trainer = PseudoLabelTrainer(
@@ -206,6 +272,8 @@ def train_or_load_ssl(config, device, logger, checkpoint_dir, force_train=False)
             save_last=config.training.save_last,
             num_classes=config.dataset.num_classes,
             stop_loss_threshold=config.training.stop_loss_threshold,
+            stop_loss_warmup_epochs=config.training.stop_loss_warmup_epochs,
+            total_epochs=config.training.epochs,
         )
     
     # Load or train
@@ -244,6 +312,13 @@ def main():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = os.path.join(args.output_dir, timestamp)
     os.makedirs(output_dir, exist_ok=True)
+
+    curves_dir = os.path.join(output_dir, 'curves')
+    confusion_dir = os.path.join(output_dir, 'confusion_matrices')
+    calibration_dir = os.path.join(output_dir, 'calibration')
+    os.makedirs(curves_dir, exist_ok=True)
+    os.makedirs(confusion_dir, exist_ok=True)
+    os.makedirs(calibration_dir, exist_ok=True)
     
     # Setup logger
     logger = get_logger(
@@ -350,10 +425,53 @@ def main():
     
     # Plot comparisons
     logger.info("\nGenerating comparison plots...")
-    plot_comparison(supervised_history, ssl_history, output_dir, 'test_acc')
-    plot_comparison(supervised_history, ssl_history, output_dir, 'train_loss')
-    plot_comparison(supervised_history, ssl_history, output_dir, 'test_loss')
-    plot_per_class_results(supervised_history, ssl_history, output_dir)
+    plot_comparison(supervised_history, ssl_history, curves_dir, 'test_acc')
+    plot_comparison(supervised_history, ssl_history, curves_dir, 'train_loss')
+    plot_comparison(supervised_history, ssl_history, curves_dir, 'test_loss')
+    plot_per_class_results(supervised_history, ssl_history, curves_dir)
+
+    # Confusion matrix and calibration diagnostics
+    logger.info("Generating confusion matrices and calibration diagrams...")
+    sup_true, sup_pred, sup_prob = collect_predictions(
+        supervised_trainer.model, supervised_trainer.test_loader, device
+    )
+    ssl_true, ssl_pred, ssl_prob = collect_predictions(
+        ssl_trainer.model, ssl_trainer.test_loader, device
+    )
+
+    plot_confusion_matrix(
+        sup_true,
+        sup_pred,
+        save_path=os.path.join(confusion_dir, 'supervised_confusion.png'),
+        title='Supervised Confusion Matrix',
+    )
+    plot_confusion_matrix(
+        ssl_true,
+        ssl_pred,
+        save_path=os.path.join(confusion_dir, 'ssl_confusion.png'),
+        title=f"SSL ({ssl_config.ssl.algorithm}) Confusion Matrix",
+    )
+
+    sup_ece = plot_reliability_diagram(
+        sup_true,
+        sup_prob,
+        save_path=os.path.join(calibration_dir, 'supervised_reliability.png'),
+        title='Supervised Reliability',
+    )
+    ssl_ece = plot_reliability_diagram(
+        ssl_true,
+        ssl_prob,
+        save_path=os.path.join(calibration_dir, 'ssl_reliability.png'),
+        title=f"SSL ({ssl_config.ssl.algorithm}) Reliability",
+    )
+
+    calibration_metrics = {
+        'supervised_ece': sup_ece,
+        'ssl_ece': ssl_ece,
+    }
+    with open(os.path.join(calibration_dir, 'calibration_metrics.json'), 'w') as f:
+        json.dump(calibration_metrics, f, indent=2)
+    logger.info("Calibration metrics saved: %s", os.path.join(calibration_dir, 'calibration_metrics.json'))
     
     logger.info("="*60)
     logger.info("Comparison complete!")

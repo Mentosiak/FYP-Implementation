@@ -1,7 +1,7 @@
-# Pseudo-Label benchmark aligned to standard CIFAR-10 SSL protocol
+# FixMatch benchmark with validation-based stop-loss
 # 4000 total labels = 400 labels per class
 
-run_name: ssl_pseudolabel_cifar10_4000labels
+run_name: ssl_fixmatch_cifar10_4000labels
 
 dataset:
   name: cifar10
@@ -21,15 +21,15 @@ training:
   momentum: 0.9
   weight_decay: 0.0005
   warmup_epochs: 0
-  validation_split: 0.0
-  stop_loss_threshold: null
+  validation_split: 0.1
+  stop_loss_threshold: 3.0
   stop_loss_warmup_epochs: 12
   save_best: true
   save_last: true
 
 ssl:
   enabled: true
-  algorithm: pseudolabel
+  algorithm: fixmatch
   labels_per_class: 400
   label_fraction: null
   unlabeled_batch_size: 256

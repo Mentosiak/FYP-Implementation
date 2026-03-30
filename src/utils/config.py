@@ -38,6 +38,9 @@ class TrainingConfig:
     warmup_epochs: int = 0
     validation_split: float = 0.0
     stop_loss_threshold: float | None = None
+    stop_loss_warmup_epochs: int = 12
+    supervised_algorithm: str = "standard"  # standard or mixup
+    mixup_alpha: float = 0.2
     save_best: bool = True
     save_last: bool = True
 
@@ -150,6 +153,9 @@ class ExperimentConfig:
                 'warmup_epochs': self.training.warmup_epochs,
                 'validation_split': self.training.validation_split,
                 'stop_loss_threshold': self.training.stop_loss_threshold,
+                'stop_loss_warmup_epochs': self.training.stop_loss_warmup_epochs,
+                'supervised_algorithm': self.training.supervised_algorithm,
+                'mixup_alpha': self.training.mixup_alpha,
                 'save_best': self.training.save_best,
                 'save_last': self.training.save_last,
             },

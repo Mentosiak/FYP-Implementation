@@ -112,6 +112,10 @@ def main():
         save_best=config.training.save_best,
         save_last=config.training.save_last,
         stop_loss_threshold=config.training.stop_loss_threshold,
+        stop_loss_warmup_epochs=config.training.stop_loss_warmup_epochs,
+        supervised_algorithm=config.training.supervised_algorithm,
+        mixup_alpha=config.training.mixup_alpha,
+        total_epochs=config.training.epochs,
         num_classes=config.dataset.num_classes,
     )
     

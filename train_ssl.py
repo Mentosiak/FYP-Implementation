@@ -11,7 +11,7 @@ import torch
 from src.data import get_cifar_ssl_loaders
 from src.data.cifar import SplitConfig
 from src.models import build_model
-from src.training import PseudoLabelTrainer, FixMatchTrainer, MixMatchTrainer
+from src.training import PseudoLabelTrainer, FixMatchTrainer, MixMatchTrainer, FlexMatchTrainer
 from src.utils import set_seed, get_logger, load_config, plot_training_curves
 
 
@@ -124,6 +124,8 @@ def main():
             save_last=config.training.save_last,
             num_classes=config.dataset.num_classes,
             stop_loss_threshold=config.training.stop_loss_threshold,
+            stop_loss_warmup_epochs=config.training.stop_loss_warmup_epochs,
+            total_epochs=config.training.epochs,
         )
     elif algorithm == 'mixmatch':
         trainer = MixMatchTrainer(
@@ -146,6 +148,32 @@ def main():
             save_last=config.training.save_last,
             num_classes=config.dataset.num_classes,
             stop_loss_threshold=config.training.stop_loss_threshold,
+            stop_loss_warmup_epochs=config.training.stop_loss_warmup_epochs,
+            total_epochs=config.training.epochs,
+        )
+    elif algorithm == 'flexmatch':
+        trainer = FlexMatchTrainer(
+            model=model,
+            labeled_loader=labeled_loader,
+            unlabeled_loader=unlabeled_loader,
+            test_loader=test_loader,
+            val_loader=val_loader,
+            device=device,
+            learning_rate=config.training.learning_rate,
+            momentum=config.training.momentum,
+            weight_decay=config.training.weight_decay,
+            confidence_threshold=config.ssl.confidence_threshold,
+            unlabeled_loss_weight=config.ssl.unlabeled_loss_weight,
+            temperature=config.ssl.temperature,
+            checkpoint_dir=checkpoint_dir,
+            run_name=run_name,
+            logger=logger,
+            save_best=config.training.save_best,
+            save_last=config.training.save_last,
+            num_classes=config.dataset.num_classes,
+            stop_loss_threshold=config.training.stop_loss_threshold,
+            stop_loss_warmup_epochs=config.training.stop_loss_warmup_epochs,
+            total_epochs=config.training.epochs,
         )
     else:
         trainer = PseudoLabelTrainer(
@@ -168,6 +196,8 @@ def main():
             save_last=config.training.save_last,
             num_classes=config.dataset.num_classes,
             stop_loss_threshold=config.training.stop_loss_threshold,
+            stop_loss_warmup_epochs=config.training.stop_loss_warmup_epochs,
+            total_epochs=config.training.epochs,
         )
     
     # Resume from checkpoint if specified

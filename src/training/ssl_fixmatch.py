@@ -16,6 +16,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
+from .trainer_utils import should_trigger_stop_loss
+
 
 class FixMatchTrainer:
     """Initial FixMatch training loop for image classification."""
@@ -40,6 +42,8 @@ class FixMatchTrainer:
         save_last: bool = True,
         num_classes: int = 10,
         stop_loss_threshold: float | None = None,
+        stop_loss_warmup_epochs: int = 12,
+        total_epochs: int = 300,
     ):
         self.model = model.to(device)
         self.labeled_loader = labeled_loader
@@ -56,6 +60,7 @@ class FixMatchTrainer:
         self.save_last = save_last
         self.num_classes = num_classes
         self.stop_loss_threshold = stop_loss_threshold
+        self.stop_loss_warmup_epochs = max(0, stop_loss_warmup_epochs)
 
         self.criterion = nn.CrossEntropyLoss()
         self.optimizer = optim.SGD(
@@ -64,7 +69,7 @@ class FixMatchTrainer:
             momentum=momentum,
             weight_decay=weight_decay,
         )
-        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=300)
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=max(1, total_epochs))
 
         self.history = {
             'train_loss': [],
@@ -271,6 +276,12 @@ class FixMatchTrainer:
         self.logger.info("=" * 60)
         self.logger.info("Starting FixMatch SSL Training")
         self.logger.info("=" * 60)
+        if self.stop_loss_threshold is not None:
+            self.logger.info(
+                "Stop-loss threshold: %.4f (active after epoch %d)",
+                self.stop_loss_threshold,
+                self.stop_loss_warmup_epochs + 1,
+            )
 
         last_completed_epoch = start_epoch - 1
         for epoch in range(start_epoch, num_epochs):
@@ -311,10 +322,11 @@ class FixMatchTrainer:
                 self._save_checkpoint(epoch, is_best=True)
 
             monitored_loss = val_loss if val_loss is not None else test_loss
-            if (
-                self.stop_loss_threshold is not None
-                and monitored_loss is not None
-                and monitored_loss > self.stop_loss_threshold
+            if should_trigger_stop_loss(
+                epoch=epoch,
+                monitored_loss=monitored_loss,
+                threshold=self.stop_loss_threshold,
+                warmup_epochs=self.stop_loss_warmup_epochs,
             ):
                 self.logger.warning(
                     "Stop-loss triggered at epoch %d: monitored_loss=%.4f > threshold=%.4f",

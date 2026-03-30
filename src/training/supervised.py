@@ -11,6 +11,8 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 
+from .trainer_utils import should_trigger_stop_loss
+
 
 class SupervisedTrainer:
     """
@@ -34,6 +36,10 @@ class SupervisedTrainer:
         save_last: bool = True,
         num_classes: int = 10,
         stop_loss_threshold: float | None = None,
+        stop_loss_warmup_epochs: int = 12,
+        supervised_algorithm: str = 'standard',
+        mixup_alpha: float = 0.2,
+        total_epochs: int = 200,
     ):
         """
         Initialize supervised trainer.
@@ -54,6 +60,10 @@ class SupervisedTrainer:
             save_last: Whether to save last checkpoint
             num_classes: Number of classes
             stop_loss_threshold: Stop training when monitored loss exceeds this threshold
+            stop_loss_warmup_epochs: Ignore stop-loss check during first N epochs
+            supervised_algorithm: Training algorithm ('standard' or 'mixup')
+            mixup_alpha: Mixup beta distribution alpha
+            total_epochs: Total planned epochs (used for scheduler horizon)
         """
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -67,6 +77,9 @@ class SupervisedTrainer:
         self.save_last = save_last
         self.num_classes = num_classes
         self.stop_loss_threshold = stop_loss_threshold
+        self.stop_loss_warmup_epochs = max(0, stop_loss_warmup_epochs)
+        self.supervised_algorithm = supervised_algorithm.lower()
+        self.mixup_alpha = mixup_alpha
         
         # Loss function
         self.criterion = nn.CrossEntropyLoss()
@@ -81,7 +94,7 @@ class SupervisedTrainer:
         
         # Learning rate 
         self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer, T_max=200
+            self.optimizer, T_max=max(1, total_epochs)
         )
         
         # Training history
@@ -99,6 +112,22 @@ class SupervisedTrainer:
         self.best_acc = 0.0
         self.best_val_loss = float('inf')
         os.makedirs(self.checkpoint_dir, exist_ok=True)
+
+    def _mixup_batch(self, inputs: torch.Tensor, targets: torch.Tensor):
+        """Apply Mixup augmentation to a labeled batch."""
+        if self.mixup_alpha <= 0.0:
+            return inputs, targets, targets, 1.0
+        lam = float(np.random.beta(self.mixup_alpha, self.mixup_alpha))
+        lam = max(lam, 1.0 - lam)
+        index = torch.randperm(inputs.size(0), device=inputs.device)
+        mixed_inputs = lam * inputs + (1.0 - lam) * inputs[index]
+        targets_a = targets
+        targets_b = targets[index]
+        return mixed_inputs, targets_a, targets_b, lam
+
+    def _mixup_criterion(self, outputs, targets_a, targets_b, lam: float):
+        """Compute mixup loss as convex combination of CE losses."""
+        return lam * self.criterion(outputs, targets_a) + (1.0 - lam) * self.criterion(outputs, targets_b)
 
     def _save_checkpoint(self, epoch: int, is_best: bool = False, is_last: bool = False):
         """Save model checkpoint."""
@@ -173,8 +202,17 @@ class SupervisedTrainer:
             
             # Forward pass
             self.optimizer.zero_grad()
-            outputs = self.model(inputs)
-            loss = self.criterion(outputs, targets)
+            if self.supervised_algorithm == 'mixup':
+                mixed_inputs, targets_a, targets_b, lam = self._mixup_batch(inputs, targets)
+                outputs = self.model(mixed_inputs)
+                loss = self._mixup_criterion(outputs, targets_a, targets_b, lam)
+                with torch.no_grad():
+                    clean_outputs = self.model(inputs)
+                    _, predicted = clean_outputs.max(1)
+            else:
+                outputs = self.model(inputs)
+                loss = self.criterion(outputs, targets)
+                _, predicted = outputs.max(1)
             
             # Backward pass
             loss.backward()
@@ -182,7 +220,6 @@ class SupervisedTrainer:
             
             # Track metrics
             train_loss += loss.item()
-            _, predicted = outputs.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
         
@@ -270,6 +307,15 @@ class SupervisedTrainer:
         self.logger.info("="*60)
         self.logger.info("Device: %s", self.device)
         self.logger.info("Model parameters: %s", f"{sum(p.numel() for p in self.model.parameters()):,}")
+        self.logger.info("Supervised algorithm: %s", self.supervised_algorithm)
+        if self.supervised_algorithm == 'mixup':
+            self.logger.info("Mixup alpha: %.3f", self.mixup_alpha)
+        if self.stop_loss_threshold is not None:
+            self.logger.info(
+                "Stop-loss threshold: %.4f (active after epoch %d)",
+                self.stop_loss_threshold,
+                self.stop_loss_warmup_epochs + 1,
+            )
         self.logger.info("Training batches: %d", len(self.train_loader))
         if self.val_loader is not None:
             self.logger.info("Validation batches: %d", len(self.val_loader))
@@ -322,10 +368,11 @@ class SupervisedTrainer:
                 self._save_checkpoint(epoch, is_best=True)
 
             monitored_loss = val_loss if val_loss is not None else test_loss
-            if (
-                self.stop_loss_threshold is not None
-                and monitored_loss is not None
-                and monitored_loss > self.stop_loss_threshold
+            if should_trigger_stop_loss(
+                epoch=epoch,
+                monitored_loss=monitored_loss,
+                threshold=self.stop_loss_threshold,
+                warmup_epochs=self.stop_loss_warmup_epochs,
             ):
                 self.logger.warning(
                     "Stop-loss triggered at epoch %d: monitored_loss=%.4f > threshold=%.4f",

@@ -107,17 +107,28 @@ This will:
 .\run_docker.bat benchmark-sweep
 ```
 
-This runs three paired experiments using the standard CIFAR-10 SSL label counts used in papers and repos such as FixMatch:
-1. 250 total labels = 25 per class
-2. 1000 total labels = 100 per class
-3. 4000 total labels = 400 per class
+This runs literature-standard CIFAR-10 SSL label-count experiments:
+1. 250 total labels = 25 per class (MixMatch)
+2. 1000 total labels = 100 per class (Supervised, Pseudo-Label, MixMatch)
+3. 4000 total labels = 400 per class (Supervised, Pseudo-Label, FixMatch)
 
-Each split runs:
-1. Supervised limited-label baseline
-2. Pseudo-Label SSL
-3. Comparison plot generation
+The sweep script executes all configured runs and then writes comparison outputs.
 
 The benchmark configs live under `configs/benchmarks/` and keep the original default configs untouched.
+
+### Docker Troubleshooting (If Build/Run Fails)
+If you get daemon connection errors (for example, `dockerDesktopLinuxEngine` not found), Docker CLI is installed but Docker Desktop is not running yet.
+
+1. Start Docker Desktop and wait until it reports it is running.
+2. Re-run:
+  ```powershell
+  docker info
+  ```
+3. Then continue with:
+  ```powershell
+  .\run_docker.bat build
+  .\run_docker.bat benchmark-sweep
+  ```
 
 ### Step 6: Check Results
 
@@ -125,9 +136,10 @@ After completion, find results in:
 ```
 experiments/comparison/YYYYMMDD_HHMMSS/
 ├── comparison_results.json         # Numerical results
-├── comparison_test_acc.png         # Accuracy comparison plot
-├── comparison_train_loss.png       # Training loss plot
-└── comparison_test_loss.png        # Test loss plot
+├── curves/                         # Accuracy/loss curves
+├── confusion_matrices/             # Seaborn confusion matrices
+├── calibration/                    # Reliability diagrams + calibration_metrics.json
+└── ...
 ```
 
 **Expected Results:**
@@ -145,6 +157,49 @@ experiments/comparison/YYYYMMDD_HHMMSS/
 ```
 
 **Key Finding:** SSL achieves ~15% higher accuracy with the same number of labels!
+
+### Step 7: Generate Consolidated Benchmark Summary
+
+After individual runs complete, generate a single matrix and machine-readable summary:
+
+```powershell
+python summarize_benchmarks.py
+```
+
+Outputs are written under:
+
+```
+experiments/benchmark_summary/YYYYMMDD_HHMMSS/
+├── benchmark_summary.json      # Full run metadata and status
+├── benchmark_summary.csv       # Flat table for spreadsheet/thesis import
+└── benchmark_matrix.md         # Human-readable completion matrix
+```
+
+Use this summary to quickly identify missing runs and underperforming configs.
+
+### Step 8: Interactive Docker CUDA Training CLI
+
+Use the interactive launcher to pick algorithm, dataset, model, and label budget:
+
+```powershell
+python train_cli_docker.py
+```
+
+Optional non-interactive example:
+
+```powershell
+python train_cli_docker.py --algorithm flexmatch --dataset cifar10 --model wideresnet --labels-per-class 100 --epochs 300
+```
+
+The CLI generates a YAML config under `configs/generated/` and launches the matching training script inside Docker with `--gpus all`.
+
+### Step 9: Start Remaining CUDA Queue
+
+To launch the current remaining run queue (FixMatch 4000 resume, MixMatch 250 tuned, FlexMatch 1000):
+
+```powershell
+.\run_remaining_cuda_queue.bat
+```
 
 ---
 
@@ -302,6 +357,12 @@ ssl:
 - Wait a few minutes (data loading can be slow on first run)
 - Check logs for errors
 - Verify CIFAR-10 downloaded: `dir data\cifar-10-batches-py`
+
+**MixMatch 250-label underperforming:**
+- If `ssl_mixmatch_cifar10_250labels` is far below expected range, rerun with the tuned recovery config:
+```powershell
+python train_ssl.py --config configs/benchmarks/ssl_mixmatch_cifar10_250labels_tuned.yaml
+```
 
 ---
 
