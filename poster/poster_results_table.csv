@@ -1,0 +1,16 @@
+algorithm,labels_total,best_test_acc
+supervised,250,41.50
+supervised,1000,62.65
+supervised,4000,81.66
+pseudolabel,250,84.72
+pseudolabel,1000,89.12
+pseudolabel,4000,91.22
+fixmatch,250,84.60
+fixmatch,1000,79.39
+fixmatch,4000,90.50
+flexmatch,250,81.62
+flexmatch,1000,81.86
+flexmatch,4000,89.92
+mixmatch,250,70.77
+mixmatch,1000,78.74
+mixmatch,4000,91.53

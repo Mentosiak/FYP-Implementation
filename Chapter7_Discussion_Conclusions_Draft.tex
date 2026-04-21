@@ -1,0 +1,77 @@
+\chapter{Discussion and Conclusions}
+\label{chap:conclusions}
+\lhead{\emph{Discussion and Conclusions}}
+
+This chapter reflects on the project as a whole, drawing together implementation outcomes from Chapter~5 and evaluation outcomes from Chapter~6. The focus is to assess how well the solution addressed the original problem of label scarcity in image classification, and to identify the most important technical and methodological lessons from the completed work. To keep conclusions evidence-based, the discussion prioritizes completed and validated runs, while still using unstable or early-stop behavior as diagnostic evidence of low-label sensitivity.
+
+\section{Solution Review}
+
+The core project objective was to evaluate whether semi-supervised learning can reduce dependence on labeled data while maintaining competitive image-classification performance. In practical terms, this meant comparing supervised learning and SSL methods under progressively constrained label budgets on CIFAR-10, using a shared architecture and training framework. Based on the final results, the solution meets this objective: SSL methods provide clear value over supervised-only learning under label scarcity, and the framework produced consistent, interpretable patterns across the 250, 1000, and 4000-label settings.
+
+A strong outcome is that the benchmark did not only report top-line accuracy, but also exposed behavior differences that are important in realistic deployment: convergence stability, per-class balance, calibration quality, and sensitivity to low-label training conditions. This is important because two methods with similar final accuracy can behave very differently in confidence reliability and failure modes.
+
+At the 250-label regime, the most robust result is the Pseudo-Label run, which achieved 84.72\% and substantially outperformed the supervised baseline. This is the clearest evidence in the project that unlabeled data can compensate for severe label scarcity when pseudo-label quality remains sufficiently high. The confusion and per-class diagnostics also show that this gain was not concentrated in a single class, but distributed broadly across classes, which strengthens confidence that the gain reflects meaningful representation learning rather than narrow memorization effects.
+
+The completed 250-label reruns also clarified a key methodological point: earlier short-stop behavior was useful for diagnosing fragility, but should not define final method capability when completed reruns are available. In the finalized benchmark, FixMatch reaches 84.60\% and MixMatch reaches 70.77\% at 250 labels, which materially changes the interpretation from early-stop failure narratives. The final interpretation therefore uses completed stable runs as core evidence and treats unstable early behavior as sensitivity diagnostics.
+
+At 1000 labels, the solution demonstrates a more stable and transferable SSL regime. All methods that completed full training showed positive gains over supervised learning, and inter-method differences became more interpretable. Pseudo-Label remained the strongest by accuracy, while FixMatch, MixMatch, and FlexMatch each showed competitive improvements with different trade-offs. This budget is arguably the most informative for practical use: labels are still scarce enough for SSL gains to be meaningful, but sufficient to reduce catastrophic instability seen at extreme scarcity.
+
+At 4000 labels, all methods converged to a narrow performance band in the high-accuracy range. This confirms a core trend: as label availability increases, the marginal gain from SSL decreases, and method choice becomes less about recovering missing supervision and more about fine-grained optimization trade-offs. In this project, MixMatch achieved the strongest top-line result in this budget, while Pseudo-Label remained consistently strong and balanced overall. The supervised baseline also became substantially stronger in this regime, reinforcing that SSL benefit is most compelling under tighter label constraints.
+
+A key contribution of the solution is therefore not only identifying the top method by one number, but clarifying when and why methods behave differently across scarcity regimes. The dominant factor is label budget. At very low labels, stability and pseudo-label quality control dominate outcomes. At moderate labels, method design differences become visible but manageable. At higher labels, most methods become viable and differences shrink.
+
+Another important aspect is calibration. Accuracy was necessary but not sufficient for judging practical quality. In several runs, methods with good accuracy still showed degraded confidence calibration. This matters for decision-support contexts where confidence values influence downstream actions. The project's calibration analysis adds practical depth to the benchmark: it shows that high accuracy does not automatically imply reliable confidence, and therefore deployment choice should consider both metrics.
+
+The published-work comparison also supports a realistic interpretation of solution quality. The finalized comparison is mixed rather than uniformly below anchors: at 250 labels, FixMatch and FlexMatch remain below published anchors, while Pseudo-Label and MixMatch are above the listed anchor values. This is still consistent with practical replication constraints. Published papers often rely on broader hyperparameter search, method-specific tuning, stronger augmentation optimization, and multi-seed protocols. Matching those conditions exactly would require significantly more experiment volume and compute than was available in a single-project setting. Under that constraint, the observed method trends and low-label gains remain a strong outcome.
+
+Overall, the implemented solution solves the core problem well within project scope. It demonstrates that SSL can dramatically improve low-label performance, produces a reproducible comparative pipeline, and supports nuanced evaluation beyond single-metric reporting. The main limitation is not conceptual failure of the approach, but bounded statistical depth due to compute and timeline constraints.
+
+\section{Project Review}
+
+From a project-delivery perspective, the work succeeded because engineering and research decisions were continuously adapted to practical constraints rather than forcing an unrealistic original plan. The initial ambition of broad algorithm coverage and deep statistical replication had to be balanced against finite GPU time, infrastructure issues, and debugging overhead. The project eventually converged on a correctness-first strategy: prioritize fewer methods implemented robustly and evaluated consistently, instead of wider but shallow coverage.
+
+One of the most influential decisions was treating infrastructure reliability as a first-class deliverable. Early Docker/CUDA friction showed that training pipelines can silently run on CPU or fail in non-obvious ways if environment verification is weak. Introducing explicit verification scripts, GPU-flag wrappers, and startup logging reduced this risk and improved reproducibility. This lesson is transferable: in ML projects, experiment quality depends as much on systems correctness as on model logic.
+
+A second major lesson came from stop-loss behavior in low-label settings. Early termination can be beneficial when truly preventing wasted compute, but with sparse labels and noisy validation signals it can also invalidate runs before meaningful convergence. The project addressed this through warmup-aware checks, budget-specific settings, clearer trigger logging, and targeted reruns for critical low-label methods. Most importantly, the reporting policy was improved: completed reruns now supersede early-stop evidence for final method comparison, while early-stop traces remain diagnostic artifacts. This is a methodological improvement, not only a technical fix, because it protects conclusion quality.
+
+Data stratification was another turning point. Without strict per-class control, class imbalance in small labeled sets can produce misleading per-class and macro-level comparisons. Enforcing per-class budgets and logging split distributions improved fairness across methods and made comparison outputs more trustworthy. This reflects a broader skill developed during the project: recognizing that data protocol details can dominate apparent algorithm performance.
+
+Scope management was handled pragmatically. Local hardware limits made full multi-seed replication across all methods and budgets unrealistic within the available timeline. Instead of overextending, the project prioritized core benchmark completion, checkpoint-resume reliability, and queue-based execution for overnight throughput. This trade-off preserved scientific usefulness while staying deliverable. In hindsight, this was the correct choice for a final-year project: a complete, auditable benchmark with explicit limitations is stronger than partial, inconsistent coverage.
+
+If the project were repeated, several changes would be made earlier. First, a strict run-validity policy would be defined at experiment-design time, including minimum epoch completeness rules and automatic invalid-run tagging. Second, multi-seed replication would be planned for a smaller but fixed subset from the start, rather than deferred broadly. Third, low-label hyperparameter sensitivity studies (especially threshold and augmentation ablations) would be integrated as a scheduled work package rather than post-hoc follow-up.
+
+The project also developed substantial technical and research skills. On the technical side, these include containerized ML workflows, reproducible configuration management, robust checkpointing, and experiment orchestration under constrained resources. On the research side, the project strengthened experimental discipline: separating diagnostic evidence from confirmatory evidence, interpreting accuracy alongside calibration and per-class behavior, and writing conclusions that are ambitious in insight but conservative in claim strength.
+
+A further reflection is the value of transparent limitation reporting. Instead of hiding instability cases or missing runs, the chapter records them and explains their impact on inference strength. This improves credibility and gives clear direction for future work. It also aligns with the original project motivation from project.txt: building practical, cost-effective SSL understanding for real settings where resources and labels are constrained.
+
+Taken as a whole, the project execution addressed the target problem responsibly. It delivered a working comparative framework, generated meaningful findings under real constraints, and built a strong basis for continued work. The largest gap is statistical breadth (full seed replication and broader tuning), not conceptual coherence of the implemented approach.
+
+\section{Conclusion}
+
+The primary conclusion of this project is that semi-supervised learning is a viable and effective strategy for reducing label dependence in image classification, particularly under strong label scarcity. Across the completed benchmark, SSL methods consistently outperformed the supervised baseline at low and moderate label budgets when training was stable and run settings were valid. This supports the central premise of the work: unlabeled data can materially close the performance gap created by limited annotation.
+
+A second primary conclusion is that label budget is the dominant determinant of observed method behavior. At extreme scarcity, stability and pseudo-label quality controls strongly influence outcomes; at moderate scarcity, all methods improve and trade-offs become clearer; at higher label availability, performance gaps narrow and method differences become incremental. This budget-dependent interpretation is more useful than global method ranking because it directly informs practical model choice.
+
+A third primary conclusion is that evaluation quality depends on evidence curation, not only metric selection. In this project, low-label instability was real in early diagnostics, but finalized conclusions are based on completed reruns and validated checkpoints. This improves scientific validity while preserving useful diagnostic insight about sensitivity. Diagnostic artifacts remain useful for understanding fragility, but must be separated from confirmatory evidence.
+
+Secondary conclusions concern deployment realism and replication standards. Accuracy alone is insufficient for method selection; calibration and per-class behavior materially affect practical trustworthiness. The 250-label results illustrate this directly: Pseudo-Label and FixMatch improve calibration over supervised, while MixMatch and FlexMatch remain worse calibrated despite accuracy gains. The project also confirms that useful replication under local constraints is feasible, but exact one-to-one matching with published headline numbers typically requires broader hyperparameter search, more seeds, and stronger protocol control than available in this scope.
+
+In summary, the project achieved its central goal by delivering a reproducible, method-comparative SSL benchmark and generating defensible evidence about when SSL is most beneficial. The work contributes both quantitative findings and methodological lessons: how to evaluate SSL responsibly under constrained compute, how to validate low-label behavior through targeted reruns, and how to communicate conclusions conservatively without losing practical value.
+
+\section{Future Work}
+
+Future work should prioritize evidence-strengthening actions over broad feature expansion.
+
+First, the benchmark should be extended with systematic multi-seed replication across all key method-budget combinations. This will allow confidence intervals, variance estimates, and statistical significance testing, addressing the largest current validity gap.
+
+Second, low-label ablation studies should be completed for settings that are known to be sensitive, particularly confidence-threshold and augmentation-policy sweeps. These ablations are important for distinguishing algorithm limitations from configuration limitations in the 250-label regime.
+
+Third, run-validity automation should be added to the experiment pipeline. For example, runs that terminate before a minimum epoch threshold can be auto-flagged and excluded from benchmark aggregation by default. This would reduce manual curation burden and enforce consistent reporting standards.
+
+Fourth, the evaluation should be extended beyond CIFAR-10 to at least one additional dataset. Cross-dataset validation is necessary to test whether the observed stability and calibration patterns generalize or are benchmark-specific.
+
+Fifth, model selection criteria can be upgraded from accuracy-only to multi-objective ranking, combining accuracy, calibration, training stability, and compute cost. This would better support real deployment scenarios where confidence reliability and resource constraints matter.
+
+Finally, the project workflow can be improved through tighter automation of experiment queues, summary generation, and chapter-table synchronization so that reruns propagate cleanly into reporting artifacts. This would shorten iteration cycles and make future thesis updates less error-prone.
+
+These steps would convert the current strong single-project benchmark into a statistically richer and more generalizable SSL evaluation framework.

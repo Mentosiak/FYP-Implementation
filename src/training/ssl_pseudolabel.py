@@ -24,7 +24,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import numpy as np
 
-from .trainer_utils import should_trigger_stop_loss
+from .trainer_utils import ensure_history_lists, get_gpu_epoch_metrics, should_trigger_stop_loss
 
 
 class PseudoLabelTrainer:
@@ -130,7 +130,10 @@ class PseudoLabelTrainer:
             'pseudo_label_accuracy': [],  # Accuracy of pseudo-labels (if we track true labels)
             'epoch_time': [],
             'per_class_acc': [],  # Per-class accuracy on test set
+            'gpu_mem_used_mb': [],
+            'gpu_util_pct': [],
         }
+        ensure_history_lists(self.history, ['gpu_mem_used_mb', 'gpu_util_pct'])
         
         self.best_acc = 0.0
         self.best_val_loss = float('inf')
@@ -187,6 +190,7 @@ class PseudoLabelTrainer:
         
         if 'history' in checkpoint:
             self.history = checkpoint['history']
+            ensure_history_lists(self.history, ['gpu_mem_used_mb', 'gpu_util_pct'])
         
         start_epoch = checkpoint.get('epoch', 0) + 1
         self.logger.info(f"Loaded checkpoint from epoch {checkpoint.get('epoch', 0)}")
@@ -427,6 +431,7 @@ class PseudoLabelTrainer:
             self.scheduler.step()
             
             epoch_time = time.time() - start_time
+            gpu_mem_used_mb, gpu_util_pct = get_gpu_epoch_metrics(self.device)
             
             # Update history
             self.history['train_loss'].append(train_loss)
@@ -440,6 +445,8 @@ class PseudoLabelTrainer:
             self.history['pseudo_label_ratio'].append(pseudo_ratio)
             self.history['per_class_acc'].append(per_class_acc)
             self.history['epoch_time'].append(epoch_time)
+            self.history['gpu_mem_used_mb'].append(gpu_mem_used_mb)
+            self.history['gpu_util_pct'].append(gpu_util_pct)
             last_completed_epoch = epoch
             
             # Check if best model (prefer lowest validation loss if available)
@@ -474,10 +481,14 @@ class PseudoLabelTrainer:
             
             # Logging
             current_lr = self.optimizer.param_groups[0]['lr']
+            gpu_mem_str = f"{gpu_mem_used_mb:.0f} MiB" if gpu_mem_used_mb is not None else "n/a"
+            gpu_util_str = f"{gpu_util_pct:.0f}%" if gpu_util_pct is not None else "n/a"
             if val_loss is not None and val_acc is not None:
                 self.logger.info(
                     f"Epoch [{epoch+1}/{num_epochs}] | "
                     f"Time: {epoch_time:.1f}s | "
+                    f"GPU Mem Used: {gpu_mem_str} | "
+                    f"GPU Util: {gpu_util_str} | "
                     f"LR: {current_lr:.6f} | "
                     f"Train Loss: {train_loss:.4f} | "
                     f"Train Acc: {train_acc:.2f}% | "
@@ -492,6 +503,8 @@ class PseudoLabelTrainer:
                 self.logger.info(
                     f"Epoch [{epoch+1}/{num_epochs}] | "
                     f"Time: {epoch_time:.1f}s | "
+                    f"GPU Mem Used: {gpu_mem_str} | "
+                    f"GPU Util: {gpu_util_str} | "
                     f"LR: {current_lr:.6f} | "
                     f"Train Loss: {train_loss:.4f} | "
                     f"Train Acc: {train_acc:.2f}% | "

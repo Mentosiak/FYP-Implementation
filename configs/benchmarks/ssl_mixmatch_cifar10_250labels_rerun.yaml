@@ -1,7 +1,6 @@
-﻿# MixMatch benchmark with validation-based stop-loss
-# 250 total labels = 25 labels per class
+# MixMatch rerun for 250 labels with stop-loss disabled
 
-run_name: ssl_mixmatch_cifar10_250labels
+run_name: ssl_mixmatch_cifar10_250labels_rerun
 
 dataset:
   name: cifar10
@@ -22,7 +21,7 @@ training:
   weight_decay: 0.0005
   warmup_epochs: 0
   validation_split: 0.1
-  stop_loss_threshold: 999.0
+  stop_loss_threshold: null
   stop_loss_warmup_epochs: 12
   save_best: true
   save_last: true

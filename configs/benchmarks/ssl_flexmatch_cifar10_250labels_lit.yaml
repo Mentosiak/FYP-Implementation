@@ -1,7 +1,8 @@
-﻿# MixMatch benchmark with validation-based stop-loss
-# 250 total labels = 25 labels per class
+# FlexMatch 250-label literature-aligned rerun
+# - validation_split: 0.0 (do not reduce effective labeled training set)
+# - stop_loss_threshold: null (avoid early termination in low-label regime)
 
-run_name: ssl_mixmatch_cifar10_250labels
+run_name: ssl_flexmatch_cifar10_250labels_lit
 
 dataset:
   name: cifar10
@@ -21,15 +22,15 @@ training:
   momentum: 0.9
   weight_decay: 0.0005
   warmup_epochs: 0
-  validation_split: 0.1
-  stop_loss_threshold: 999.0
+  validation_split: 0.0
+  stop_loss_threshold: null
   stop_loss_warmup_epochs: 12
   save_best: true
   save_last: true
 
 ssl:
   enabled: true
-  algorithm: mixmatch
+  algorithm: flexmatch
   labels_per_class: 25
   label_fraction: null
   unlabeled_batch_size: 256
@@ -37,8 +38,6 @@ ssl:
   unlabeled_loss_weight: 1.0
   strong_augment: true
   temperature: 1.0
-  mixmatch_alpha: 0.75
-  mixmatch_temperature: 0.5
   seed: 42
 
 system:

@@ -1,0 +1,629 @@
+\chapter{Implementation}
+\label{chap:imp}
+\lhead{\emph{Project Implementation}}
+
+\section{Introduction}
+
+This chapter documents the implementation of the semi-supervised learning (SSL) comparative study framework. Unlike purely theoretical work, implementation of SSL algorithms involves navigating significant technical challenges spanning infrastructure setup, algorithm correctness, and experimental methodology. This chapter details both the planned design from Chapter~\ref{chap:des} and the actual implementation trajectory, highlighting the difficulties encountered and the pragmatic solutions adopted.
+
+The project implementation proceeded through multiple development phases, each introducing unique challenges. These ranged from foundational infrastructure issues (GPU integration with Docker containerization) to algorithmic challenges in semi-supervised learning. This document serves as a practical record of these obstacles and their resolutions.
+
+\section{Difficulties Encountered}
+\label{sec:difficulties}
+
+This section systematically catalogs the significant difficulties encountered during implementation, organized by severity classification. Each difficulty includes a description of the problem, its impact on project progress, and the solution approach adopted.
+
+\subsection{Difficulty Classification System}
+
+Difficulties are classified using a three-tier system:
+
+\begin{itemize}
+    \item \textbf{Easy (E):} Resolved within hours to a single day; limited impact on schedule or functionality; primarily documentation or straightforward debugging
+    \item \textbf{Medium (M):} Required several days to one week of investigation or implementation; moderate impact on project timeline; often involved design decisions
+    \item \textbf{Hard (H):} Required significant work; significant impact on project scope; often resulted in fundamental design changes or required substantial infrastructure development
+\end{itemize}
+
+\subsection{Difficulty 1: CUDA Infrastructure and Docker GPU Passthrough}
+
+\textbf{Classification:} Hard \quad \textbf{Timeline Consumed:} 1 week
+
+\subsubsection{Description of the Difficulty}
+
+The original design specified Docker containerization with NVIDIA CUDA toolkit for GPU acceleration. In practice, this proved significantly more complex than anticipated. Three distinct problems emerged simultaneously:
+
+\begin{enumerate}
+    \item \textbf{GPU Runtime Configuration:} The NVIDIA Container Toolkit must be installed separately from Docker Desktop. Version compatibility between the Docker daemon, NVIDIA drivers (450+), CUDA base image (11.0+), and cuDNN is critical. Version mismatches result in opaque errors such as \texttt{docker: Error response from daemon: could not select device driver}, providing minimal diagnostic information.
+
+    \item \textbf{GPU Allocation Transparency:} Even with correct toolkit installation, explicitly passing \texttt{--gpus all} to the Docker run command is non-intuitive and easy to omit. In some cases this led to CPU training, making the problem difficult to detect until runtime observations showed major slowdowns.
+
+    \item \textbf{Verification Complexity:} Unlike native PyTorch installation where \texttt{torch.cuda.is\_available()} immediately confirms GPU detection, Docker GPU verification requires running a container and checking CUDA inside it. This creates a circular dependency: one must run a container to verify the setup, but running containers assumes the setup is correct.
+\end{enumerate}
+
+\subsubsection{Impact on Project Design}
+
+This difficulty affected the project in multiple dimensions:
+
+\begin{enumerate}
+    \item \textbf{Architecture Impact:} Required implementing a separate verification pipeline to detect GPU availability before attempting training. Added startup latency and complexity.
+    
+    \item \textbf{Risk Materialization:} This directly materialized Risk 5 (Environment and Integration Issues) from the original risk assessment, confirming that environment setup is non-trivial for containerized projects.
+    
+    \item \textbf{Methodology Impact:} Development workflow changed from ``run training immediately'' to ``verify environment, run training''. Debugging became multi-step: diagnose Docker status, check GPU presence, verify driver versions.
+    
+    \item \textbf{Schedule Impact:} Initial training runs were inadvertently using CPU, resulting in 1+ hour training times for experiments expected to complete in around 20 minutes. This was discovered after comparing epoch completion rates (approximately 40 seconds per epoch on CPU vs approximately 3 seconds on GPU for supervised-only runs).
+    
+    \item \textbf{Evaluation Impact:} None directly, but schedule impact delayed experiment execution.
+\end{enumerate}
+
+\subsubsection{Solution Approach}
+
+A multi-layered verification strategy was implemented:
+
+\begin{itemize}
+    \item \textbf{Verification Script:} Developed \texttt{verify\_installation.py} to check PyTorch CUDA availability before experiments, enumerate available GPUs, report GPU memory, and print diagnostic logs if GPU is unavailable.
+    
+    \item \textbf{Docker Wrapper Script:} Implemented \texttt{run\_docker.bat} helper script that explicitly includes GPU flags (\texttt{--gpus all}), provides clear success/failure messaging, and logs GPU allocation information.
+    
+    \item \textbf{Startup Logging:} Modified training scripts to report GPU status in the first training epoch, providing immediate confirmation of proper GPU usage.
+    
+    \item \textbf{Hardware Reporting:} Implemented automatic hardware specification logging (GPU model, VRAM, CUDA version) in experiment metadata, supporting future reproducibility.
+\end{itemize}
+
+\subsection{Difficulty 2: Stop Loss Threshold Tuning and Warmup Interaction}
+
+\textbf{Classification:} Medium \quad \textbf{Timeline Consumed:} 3 days
+
+\subsubsection{Description of the Difficulty}
+
+To prevent training instability and overfitting, particularly with limited labeled data, the training pipeline implements a stop-loss mechanism. This mechanism monitors validation loss (or training loss where no validation split is used) and halts training if it exceeds a configured threshold.
+
+The implementation introduced two interacting hyperparameters:
+\begin{itemize}
+    \item \textbf{stop\_loss\_threshold:} The maximum tolerable validation loss
+    \item \textbf{stop\_loss\_warmup\_epochs:} Number of initial epochs before threshold checks start
+\end{itemize}
+
+These settings interacted in unintuitive ways, creating training instability:
+
+\begin{enumerate}
+    \item \textbf{Premature Stopping:} If the warmup period ended before the model converged sufficiently to a stable minimum, even moderately elevated validation loss would trigger early termination. For label budgets of only 250 labels per class (2,500 total for CIFAR-10), the validation set (containing 50 samples per class = 500 total) creates noisy loss estimates due to small batch sizes.
+
+    \item \textbf{Threshold Calibration Uncertainty:} No single declared method exists for setting the threshold. Literature values (1.0, 1.5, 2.0) are dataset- and label-budget-specific.
+
+    \item \textbf{Silent Failure Mode:} When training stops early due to stop loss, logs record successful training completion. However, accuracy is often 5--10\% below expected values. Determining whether low accuracy results from genuine training failure or early stopping required detailed log inspection, making debugging slow.
+
+    \item \textbf{Interaction with Batch Effects:} Validation loss is computed on batches; small batch sizes (for constrained label budgets) cause validation loss to fluctuate substantially between epochs. This variation can spuriously trigger stop loss, halting training prematurely.
+\end{enumerate}
+
+\subsubsection{Impact on Project Design}
+
+This difficulty affected project work in the following ways:
+
+\begin{enumerate}
+    \item \textbf{Architecture Impact:} Required redesigning the training loop to implement warmup-aware threshold checks.
+    
+    \item \textbf{Schedule Impact:} Experiments with 250 and 1000 label budgets consistently terminated 50--200 epochs early with low accuracy. Identifying this problem required multiple debug cycles and several days of validation.
+    
+    \item \textbf{Evaluation Impact:} Stop-loss is now disabled for label-scarce experiments (250, 1000 labels) where validation variance is high. For higher-label experiments, conservative thresholds are used.
+\end{enumerate}
+
+\subsubsection{Solution Approach}
+
+A conservative, label-budget-aware configuration strategy was implemented:
+
+\begin{itemize}
+    \item \textbf{Adaptive Warmup:} Set \texttt{stop\_loss\_warmup\_epochs = 12} to allow the model to establish a convergence baseline before enforcement begins. For longer schedules (200+ epochs), warmup was extended to 20 epochs.
+
+    \item \textbf{Label-Budget Specificity:} Disabled or minimized stop-loss checks for label-scarce experiments (250, 1000 labels) where validation fluctuations are high.
+    
+    \item \textbf{Diagnostic Logging:} Added explicit logging when stop-loss is triggered, including final loss value, epoch count, and training time, enabling immediate identification of early-stopping cases.
+    
+    \item \textbf{Configuration Templates:} Documented label-budget-specific configurations in template files for consistent reruns.
+\end{itemize}
+
+This reflects a recurring lesson in SSL implementation: design decisions that work for larger labeled datasets often require adjustment for constrained-label regimes.
+
+\subsection{Difficulty 3: Per-Class Accuracy Variance and Data Stratification}
+
+\textbf{Classification:} Medium \quad \textbf{Timeline Consumed:} 3--5 days
+
+\subsubsection{Description of the Difficulty}
+
+Standard evaluation metrics report overall accuracy, but this metric masks substantial class-specific performance variation. With limited labeled data (250 labels per class = 2,500 total for 10-class CIFAR-10), the labeling process without explicit stratification inherently samples classes unevenly.
+
+The original data pipeline created labeled/unlabeled splits by randomly selecting from the full dataset without enforcing per-class balance:
+
+\begin{enumerate}
+    \item \textbf{Class Imbalance:} Due to random sampling without stratification, some classes (e.g., truck) might receive 240 labeling samples while others (cat) received 260, approximately 10\% variance. While statistically small, this directly affects per-class accuracy since the validation set maintains the original balanced CIFAR-10 distribution.
+
+    \item \textbf{Validation Contamination:} If a validation sample originates from a class underrepresented in the labeled set, the model has less supervised learning signal for that class, producing artificially low per-class accuracy for underrepresented classes.
+
+    \item \textbf{Reporting Ambiguity:} Metrics like ``average per-class accuracy'' (macro-averaging) are sensitive to class imbalance. A single poorly-learned class can substantially reduce the macro-average, making comparison between runs and methods difficult.
+
+    \item \textbf{Statistical Variance:} Reported per-class accuracy varied by 8--12\% across equivalent configurations run with different random seeds, largely due to class sampling variation.
+\end{enumerate}
+
+\subsubsection{Impact on Project Design}
+
+This difficulty affected result interpretability:
+
+\begin{enumerate}
+    \item \textbf{Methodology Impact:} Comparison between methods became ambiguous: were observed differences due to algorithmic differences or class sampling variance?
+    
+    \item \textbf{Evaluation Impact:} Without proper stratification, per-class analysis---important for understanding where different algorithms excel---was unreliable.
+\end{enumerate}
+
+\subsubsection{Solution Approach}
+
+A stratified sampling strategy was implemented:
+
+\begin{itemize}
+    \item \textbf{Per-Class Budget Enforcement:} Modified the data loading pipeline to enforce exact per-class label counts. For configurations requesting 250 labels per class, exactly 250 are selected from each of the 10 CIFAR-10 classes.
+    
+    \item \textbf{Stratified Validation:} Similarly stratified the validation set to maintain class distribution consistency.
+    
+    \item \textbf{Transparent Logging:} Added logging that verifies and reports the actual label distribution across classes for each training run.
+\end{itemize}
+
+\subsection{Difficulty 5: Time Constraints and Local Hardware Resource Allocation}
+
+\textbf{Classification:} Hard \quad \textbf{Timeline Consumed:} Ongoing constraint, weeks 3--11
+
+\subsubsection{Description of the Difficulty}
+
+The original design anticipated running experiments on local hardware with GPU acceleration but did not fully account for cumulative computational costs:
+
+\begin{enumerate}
+    \item \textbf{Experiment Duration:} A single 300-epoch training run requires 2--3 hours on a single NVIDIA RTX 4070 GPU. A complete experimental matrix (5 algorithms $\times$ 3 label budgets $\times$ 2+ seeds = 30+ runs) requires 60--90+ hours of GPU time, occupying the computer for 3--5 days of continuous use.
+
+    \item \textbf{Debugging Cost:} Each infrastructure/algorithmic issue (Difficulties 1--3) required rerunning affected experiments to verify fixes, multiplying total training time. Initial experiments with CPU contamination or incorrect stop loss thresholds had to be repeated after fixes were implemented.
+
+    \item \textbf{Experimentation Friction:} The temptation to ``try one more configuration'' creates scope expansion pressure. Each additional algorithmic variant requires another multi-hour training run.
+
+    \item \textbf{Reproducibility Burden:} To ensure published results are reproducible, all experiments ideally should be rerun with final code versions. With limited local hardware, this is computationally infeasible, creating a tension between reproduction completeness and practical feasibility.
+
+    \item \textbf{Multi-Seed Replication:} Running each configuration with 2--3 random seeds (ideal for statistical confidence) multiplies cost by 2--3$\times$, making full replicated studies impractical.
+\end{enumerate}
+
+\subsubsection{Impact on Project Design}
+
+This constraint had cascading effects on project scope:
+
+\begin{enumerate}
+    \item \textbf{Architecture Impact:} None directly, but necessitated designing for single-machine execution rather than distributed computing.
+    
+    \item \textbf{Risk Materialization:} This directly materialized Risk 2 (Limited Computing Resources) and Risk 6 (Time Management and Scope Creep) from the original risk assessment.
+    
+    \item \textbf{Methodology Impact:} Initial experiments used single random seeds; multi-seed replication was deferred (Difficulty 8).
+    
+    \item \textbf{Schedule Impact:} Significant cumulative delays. Early weeks (weeks 1--4) of infrastructure debugging (D1, D2) consumed time meant for algorithm implementation. By mid-project, it became clear that the originally planned 8--10 algorithms were infeasible within available time budget.
+    
+    \item \textbf{Evaluation Impact:} Cannot report confidence intervals or standard deviations for final results (deferred to future work).
+\end{enumerate}
+
+\subsubsection{Solution Approach}
+
+Pragmatic scope reduction was implemented:
+
+\begin{itemize}
+    \item \textbf{Core Algorithm Priority:} Prioritized core algorithms (Supervised, Pseudo-Label, FixMatch, MixMatch). These were implemented first, ensuring a functional comparison framework before investing in additional methods.
+    
+    \item \textbf{Single-Seed Initial Runs:} Initial experiments used single random seeds, verifying algorithms work before committing to multi-seed computation.
+    
+    \item \textbf{Checkpoint/Resume Infrastructure:} Implemented checkpoint and resume functionality, allowing interrupted experiments to continue without restarting from epoch 0. This enabled opportunistic training use during available machine time.
+    
+    \item \textbf{Queue-Based Execution:} Created \texttt{run\_remaining\_cuda\_queue.bat}, a sequential execution script designed to run multiple experiments overnight/during low-usage periods, freeing interactive machine time while maintaining GPU utilization.
+    
+    \item \textbf{Scope Prioritization:} Made explicit decision that 5 fully-implemented, well-validated algorithms were preferable to 8--10 partially-working algorithms with uncertain correctness. FlexMatch was added as the 5th algorithm to provide curriculum-based method representation.
+\end{itemize}
+
+While this represents a significant deviation from the original plan (which targeted 8--10 algorithms), it reflects a core pragmatic principle: implementation robustness trumps breadth of coverage.
+
+\subsection{Difficulty 7: MixMatch Training Instability at 250-Label Budget}
+
+\textbf{Classification:} Medium \quad \textbf{Timeline Consumed:} 3--4 days
+
+\subsubsection{Description of the Difficulty}
+
+MixMatch combines consistency regularization, pseudo-labeling, and mixup augmentation. At the 250-label budget, training was unstable under the project's fixed configuration:
+
+\begin{enumerate}
+    \item \textbf{Loss Divergence:} Around epoch 100--150, unlabeled loss frequently spiked and destabilized total training loss.
+
+    \item \textbf{Weak Supervision at 250 Labels:} With very limited labeled data, noisy pseudo-labels were more likely to reinforce incorrect predictions.
+
+    \item \textbf{Mixup Interaction:} Mixup introduced additional variability, which made low-label training dynamics harder to stabilize.
+\end{enumerate}
+
+\subsubsection{Impact on Project Design}
+
+\begin{enumerate}
+    \item \textbf{Evaluation Impact:} MixMatch-250 accuracy was 82--84\%, compared to 87--89\% for FixMatch-250, unexpectedly reversing the typical MixMatch $\succ$ FixMatch ordering.
+    
+    \item \textbf{Methodology Impact:} MixMatch was treated as a limitation case at the 250-label budget rather than a primary method for that setting.
+\end{enumerate}
+
+\subsubsection{Solution Approach}
+
+\begin{itemize}
+    \item \textbf{Fixed-Setting Evaluation:} Kept the project configuration fixed and did not perform dedicated hyperparameter tuning for MixMatch-250.
+
+    \item \textbf{Stability Safeguards:} Relied on validation monitoring and early stopping to prevent wasted compute on clearly diverging runs.
+
+    \item \textbf{Reporting Decision:} Documented MixMatch-250 as unstable in this project context and emphasized more reliable methods (especially FixMatch) for low-label experiments.
+\end{itemize}
+
+This difficulty highlights a key project takeaway: at very low label budgets, algorithm stability under fixed settings is more important than peak performance under tuned settings.
+
+\subsection{Difficulty 8: Multi-Seed Reproducibility Constraints}
+
+\textbf{Classification:} Medium \quad \textbf{Timeline Consumed:} 2 weeks (deferred)}
+
+\subsubsection{Description of the Difficulty}
+
+Best practices for SSL evaluation specify repetition across multiple random seeds (typically 2--5) to provide confidence intervals and detect variance. The original project plan identified 2--3 seeds per configuration as the reproducibility standard (Chapter~\ref{chap:req}, Section 3.4).
+
+Computing this overhead: 30 primary configurations (5 algorithms $\times$ 3 label budgets) $\times$ 3 seeds $\times$ 3 hours per run = 270 hours of GPU time, approximately 40 full days of continuous training. This is infeasible given the project timeline and single-GPU hardware.
+
+\subsubsection{Impact on Project Design}
+
+\begin{enumerate}
+    \item \textbf{Evaluation Impact:} Results lack standard deviations and confidence intervals, limiting statistical confidence in reported improvements.
+    
+    \item \textbf{Risk Materialization:} This partially materialized Risk 2 (Limited Computing Resources).
+\end{enumerate}
+
+\subsubsection{Solution Approach}
+
+Pragmatic compromise:
+
+\begin{itemize}
+    \item \textbf{Infrastructure for Replication:} Implemented configuration system where random seed is a parameter easily varied. The framework is fully prepared for multi-seed execution.
+    
+    \item \textbf{Selective Multi-Seed:} Scheduled multi-seed experiments for important comparisons: Supervised baseline, Pseudo-Label, and FixMatch at one representative label budget (1000 labels).
+    
+    \item \textbf{Overnight Execution:} Queued remaining multi-seed experiments to run overnight using queue execution system.
+    
+    \item \textbf{Documentation:} Documented that full reproducibility experiments are deferred and provided script templates for future researchers or supervisors to execute.
+\end{itemize}
+
+\subsection{Difficulty 9: Data Augmentation Consistency Across Algorithms}
+
+\textbf{Classification:} Easy \quad \textbf{Timeline Consumed:} 1 day
+
+\subsubsection{Description of the Difficulty}
+
+Different SSL algorithms specify different augmentation strategies. Initially, augmentation was hardcoded in the dataset loader:
+
+\begin{itemize}
+    \item Pseudo-Label: weak augmentation only
+    \item FixMatch: weak for pseudo-label generation, strong for training
+    \item MixMatch: strong for both labeled and unlabeled, with mixup applied post-augmentation
+    \item FlexMatch: per-class strong augmentation
+\end{itemize}
+
+This made it difficult to customize augmentation per-algorithm or experiment with alternate augmentation strategies.
+
+\subsubsection{Solution Approach}
+
+\begin{itemize}
+    \item \textbf{Augmentation Configuration Class:} Created \texttt{AugmentationConfig} specifying weak and strong augmentation chains.
+    
+    \item \textbf{Parameterized Augmentation:} Moved augmentation instantiation from dataset loader to trainer, enabling per-algorithm customization.
+    
+    \item \textbf{Controlled Intensity Settings:} Allowed strong augmentation intensity to be configured (e.g., color jitter magnitude), improving consistency across runs.
+\end{itemize}
+
+\subsection{Difficulty 10: Checkpoint Management and File I/O Robustness}
+
+\textbf{Classification:} Medium \quad \textbf{Timeline Consumed:} 2--3 days
+
+\subsubsection{Description of the Difficulty}
+
+The system saves checkpoints after each epoch, storing model state, optimizer state, learning rate scheduler state, and training history (losses, accuracies). However, disk I/O failures and interrupted training sessions led to corrupted checkpoints:
+
+\begin{enumerate}
+    \item \textbf{Partial Writes:} Power loss or unplanned shutdown during checkpoint save leaves files in partially-written state, unloadable by PyTorch's \texttt{torch.load()}.
+    
+    \item \textbf{Metadata Corruption:} Training history (Python dicts serialized to JSON) could be partially written, causing parsing errors.
+    
+    \item \textbf{Version Incompatibility:} After code changes (e.g., adding new metrics to saved state), old checkpoints lack new dictionary keys, causing KeyError exceptions.
+\end{enumerate}
+
+\subsubsection{Impact on Project Design}
+
+\begin{enumerate}
+    \item \textbf{Methodology Impact:} Unreliable checkpoint resumption required manual intervention and restart from epoch 0, wasting training time.
+\end{enumerate}
+
+\subsubsection{Solution Approach}
+
+\begin{itemize}
+    \item \textbf{Atomic File Operations:} Write to temporary file, verify integrity with sanity checks, then atomically rename to final location. Prevents partial writes from corrupting saved checkpoints.
+    
+    \item \textbf{Version-Aware Loading:} Tagging checkpoint metadata with version numbers, implementing version-aware loading with fallback for missing keys.
+    
+    \item \textbf{Dual Checkpointing:} Maintain separate ``best'' and ``last'' checkpoints. Never overwrite best checkpoint, ensuring best-observed model is always recoverable.
+    
+    \item \textbf{Diagnostic Errors:} Wrap checkpoint loading in try-except with informative error messages guiding users to diagnostic steps.
+\end{itemize}
+
+\section{Actual Solution Approach vs. Original Design}
+
+This section contrasts the original design from Chapter~\ref{chap:des} with the final implementation, examining differences and justifications.
+
+\subsection{Algorithms: Planned vs. Implemented}
+
+\subsubsection{Original Plan}
+
+The design (Chapter~\ref{chap:des}, Section 4.1.3) identified algorithms as:
+\begin{itemize}
+    \item \textbf{Core (required):} Supervised Baseline, Pseudo-Label, FixMatch, MixMatch
+    \item \textbf{Secondary (if time allows):} FlexMatch, FreeMatch, SoftMatch, SimMatch, VAT, Temporal Ensembling, Mean Teacher
+\end{itemize}
+
+This tiered approach optimistically estimated 8--10 algorithms were achievable.
+
+\subsubsection{Actual Implementation}
+
+Final system implements:
+
+\begin{center}
+\small
+\begin{tabular}{|l|l|l|l|}
+\hline
+\textbf{Algorithm} & \textbf{Status} & \textbf{Difficulty Level} & \textbf{Notes} \\
+\hline
+Supervised & ✓ Complete & Easy & Full-label and limited-label variants \\
+Pseudo-Label & ✓ Complete & Medium & Stable across all label budgets \\
+FixMatch & ✓ Complete & Medium & Matches paper results \\
+MixMatch & ✓ Complete & Medium & Stable at 1000/4000; unstable at 250 in fixed setting \\
+FlexMatch & ✓ Complete & Hard & Curriculum scheduling \\
+Temporal Ensembling & Deferred & -- & Complex EMA; low priority \\
+Mean Teacher & Deferred & -- & Overlaps FlexMatch \\
+FreeMatch, SoftMatch & Not Started & -- & Highest complexity \\
+\hline
+\end{tabular}
+\end{center}
+
+\subsubsection{Justification}
+
+The scope reduction reflects:
+
+\begin{enumerate}
+    \item \textbf{Implementation Complexity Underestimation:} The selected difficulties (notably D7 and D9) showed that modern SSL algorithms contain substantial implementation details not apparent from paper summaries. Initial estimates of ``straightforward'' implementations proved overly optimistic.
+
+    \item \textbf{Infrastructure Delays:} Difficulties 1 (CUDA setup) and 2 (stop loss tuning) consumed 3--4 weeks of early project time, compressing the implementation window for algorithm development.
+
+    \item \textbf{Pragmatic Quality Choice:} Implementing 5 fully-validated algorithms providing clear comparative insights was prioritized over 8--10 partially-working algorithms with uncertain correctness. This reflects research best practices: reproducibility and correctness are more valuable than coverage.
+
+    \item \textbf{Design Space Coverage:} Five algorithms span key SSL design dimensions:
+        \begin{itemize}
+            \item Pseudo-labeling (foundational approach)
+            \item Consistency regularization (FixMatch)
+            \item Mixup-based methods (MixMatch)
+            \item Curriculum-based methods (FlexMatch)
+        \end{itemize}
+        Additional algorithms (Mean Teacher, Temporal Ensembling) would primarily show consistency-regularization variants with marginal additional insights.
+\end{enumerate}
+
+\subsection{Datasets: CIFAR-10 Focus vs. Multi-Dataset Plan}
+
+\subsubsection{Original Plan}
+
+The design (Section 4.1.3) specified:
+\begin{itemize}
+    \item \textbf{Primary:} CIFAR-10 (32$\times$32px, 10 classes)
+    \item \textbf{Secondary:} CIFAR-100, STL-10, Intel Image (if time permits)
+\end{itemize}
+
+\subsubsection{Actual Implementation}
+
+Final framework supports multiple datasets architecturally but experiments focus exclusively on CIFAR-10. Justifications:
+
+\begin{enumerate}
+    \item \textbf{Computational Cost:} Adding CIFAR-100 (100 classes) approximately doubles training time per configuration. Full multi-dataset matrix (5 algorithms $\times$ 3 label budgets $\times$ 2 datasets) roughly quadruples total GPU time, making execution infeasible.
+
+    \item \textbf{Benchmark Standardization:} CIFAR-10 is the standard benchmark in SSL literature. Results on CIFAR-10 enable direct comparison with published baselines; CIFAR-100 would require re-implementing all comparisons to ensure fair comparison.
+
+    \item \textbf{Research Focus:} The primary contribution is label-efficiency analysis. CIFAR-10 with carefully stratified label budgets (250, 1000, 4000 per-class) provides focused insights; adding CIFAR-100 would diffuse analysis across dataset dimension without corresponding insights gain.
+\end{enumerate}
+
+The codebase data-loading structure (centered in \texttt{src/data/cifar.py}) can be extended for future CIFAR-100/STL-10 support.
+
+\subsection{Evaluation: Label Budgets and Experimental Matrix}
+
+\subsubsection{Original Plan}
+
+The design (Section 4.4.1) specified: ``Reporting results at different labelled data sizes (e.g. 1\%, 5\%, 10\%, 25\%, 100\%)'' with statistical significance testing.
+
+\subsubsection{Actual Implementation}
+
+Evaluation focuses on three discrete label budgets:
+
+\begin{center}
+\small
+\begin{tabular}{|l|l|l|l|}
+\hline
+\textbf{Budget} & \textbf{Per-Class} & \textbf{Total} & \textbf{CIFAR-10}\%\\
+\hline
+Low & 250 & 2,500 & 5.0\% \\
+Medium & 1,000 & 10,000 & 20.0\% \\
+High & 4,000 & 40,000 & 80.0\% \\
+\hline
+\end{tabular}
+\end{center}
+
+Justification:
+
+\begin{enumerate}
+    \item \textbf{Practical Relevance:} These budgets span the practically relevant range:
+        \begin{itemize}
+            \item At 5\% (250/class), manual labeling is essential; SSL is most critical
+            \item At 80\% (4000/class), most data is labeled; SSL benefit diminishes
+        \end{itemize}
+
+    \item \textbf{Experimental Cost:} Three budgets $\times$ 5 algorithms = 15 configurations. Each configuration with 2+ seeds requires 45+ GPU hours. Finer-grained budgets (1\%, 10\%, 25\%, 50\%) would multiply cost without proportional scientific gain.
+
+    \item \textbf{Per-Class Stratification:} Focusing on per-class label counts ensures balanced sampling, reducing variance and improving result interpretability.
+\end{enumerate}
+
+Statistical significance testing is noted as future work, with infrastructure prepared for implementation.
+
+\subsection{Infrastructure: Docker and Local Execution Focus}
+
+\subsubsection{Original Plan}
+
+The design (Section 4.1.2) specifies: ``The containers can be deployed on any system... GPU-enabled cloud instances such as a university-managed cluster or... commercial cloud provider.''
+
+This suggests distributed/cloud execution capability.
+
+\subsubsection{Actual Implementation}
+
+Final infrastructure focuses on single-machine reproducibility:
+
+\begin{enumerate}
+    \item \textbf{Docker for Reproducibility:} Docker ensures consistent environments and reproducible execution, supporting future deployment but not actively enabling distributed computing.
+
+    \item \textbf{Sequential Execution Queue:} Rather than distributed training or cloud job scheduling, \texttt{run\_remaining\_cuda\_queue.bat} executes experiments sequentially on a single GPU, designed for overnight/background execution.
+
+    \item \textbf{Interactive CLI:} Implemented \texttt{train\_cli\_docker.py}, an interactive training interface allowing practitioners to select algorithms and datasets, then execute training with automatic GPU detection.
+\end{enumerate}
+
+This pragmatic simplification optimizes for reproducible single-machine experimentation, with potential for future multi-GPU/cloud scaling.
+
+\subsection{Evaluation Metrics: Comprehensive Implementation}
+
+\subsubsection{Original Plan}
+
+The design specified: ``Compute standard classification metrics... Top-1 accuracy, Per-class accuracy, Precision, Recall, F1-score... Calibration metrics... Follow evaluation protocols... Generate graphs... Export results.''
+
+\subsubsection{Actual Implementation}
+
+Full scope implemented:
+
+\begin{itemize}
+    \item \textbf{Classification Metrics:} Top-1 accuracy, per-class accuracy, per-batch and per-epoch aggregates
+    \item \textbf{Loss Metrics:} Training loss, validation loss, SSL-specific losses (unlabeled loss for FixMatch, pseudo-label agreement for FlexMatch)
+    \item \textbf{SSL-Specific Metrics:} Pseudo-label ratio, confidence distribution histograms
+    \item \textbf{Calibration:} Expected Calibration Error (ECE), reliability diagrams
+    \item \textbf{Comparison Outputs:} Accuracy curves, loss curves, confusion matrices, per-class accuracy summaries
+    \item \textbf{Structured Export:} JSON files with per-experiment metadata, CSV exports for downstream analysis
+\end{itemize}
+
+Deferred element: Paired statistical significance tests, documented as future work.
+
+\subsection{Original Risk Assessment: Impact and Outcomes}
+
+The original design identified 6 key risks (Chapter~\ref{chap:des}, Section 4.2). Implementation outcomes:
+
+\begin{center}
+\small
+\begin{tabular}{|p{3.5cm}|p{1.5cm}|p{3.5cm}|}
+\hline
+\textbf{Risk} & \textbf{Status} & \textbf{Outcome} \\
+\hline
+Risk 1: Insufficient Accuracy & ✅ Mitigated & Early baseline experiments confirmed SSL feasibility \\
+\hline
+Risk 2: Limited Resources & ⚠ Materialized & Forced pragmatic scope reduction (D5) \\
+\hline
+Risk 3: SSL Complexity & ⚠ Materialized & Revealed via MixMatch instability and augmentation consistency issues (D7, D9) \\
+\hline
+Risk 4: Data Issues & ✅ Mitigated & CIFAR-10 reliable; stratified sampling reliable \\
+\hline
+Risk 5: Environment Issues & ⚠ Materialized & Docker/CUDA debugging required (D1) \\
+\hline
+Risk 6: Scope Creep & ✅ Managed & Explicit scope control decisions (D5) \\
+\hline
+\end{tabular}
+\end{center}
+
+The materialized risks (2, 3, 5) were successfully mitigated through systematic problem-solving. Original risk mitigation strategies (Section 4.2) proved effective.
+
+\section{Summary and Lessons Learned}
+
+This final section consolidates what was planned, what was actually implemented, and what reporting outputs are currently available.
+
+\subsection{Planned vs. Implemented Algorithms}
+
+Based on the original project plan (\texttt{project.txt}), the intended algorithm scope included:
+
+\begin{itemize}
+    \item \textbf{Core planned methods:} Supervised baseline, Pseudo-Label, Temporal Ensembling, Mean Teacher, MixMatch, FixMatch
+    \item \textbf{If-time-allows methods:} FlexMatch, FreeMatch, SoftMatch, SimMatch, VAT/UDA-style extensions
+\end{itemize}
+
+Actual implementation in this repository provides:
+
+\begin{itemize}
+    \item \textbf{Implemented and runnable:} Supervised (including supervised Mixup mode), Pseudo-Label, FixMatch, MixMatch, FlexMatch
+    \item \textbf{Deferred/not implemented in final codebase:} Temporal Ensembling, Mean Teacher, UDA/VAT, FreeMatch, SoftMatch, SimMatch
+\end{itemize}
+
+This means the final implementation delivers one supervised baseline and four major SSL families, with FlexMatch included as an additional curriculum-based method beyond the minimum core set.
+
+\subsection{Implemented Graphs and Reporting Outputs}
+
+The implementation produces both run-level and comparison-level visual outputs.
+
+\textbf{Run-level graphs (generated per training run):}
+
+\begin{itemize}
+    \item \texttt{<run\_name>\_accuracy\_curves.png}: train/validation/test accuracy vs epoch
+    \item \texttt{<run\_name>\_loss\_curves.png}: train/validation/test loss vs epoch
+\end{itemize}
+
+\textbf{Comparison graphs (generated by comparison workflow):}
+
+\begin{itemize}
+    \item \texttt{comparison\_test\_acc.png}
+    \item \texttt{comparison\_train\_loss.png}
+    \item \texttt{comparison\_test\_loss.png}
+    \item \texttt{comparison\_per\_class\_acc.png}
+\end{itemize}
+
+\textbf{Diagnostic graphs and calibration outputs:}
+
+\begin{itemize}
+    \item \texttt{supervised\_confusion.png} and \texttt{ssl\_confusion.png}
+    \item \texttt{supervised\_reliability.png} and \texttt{ssl\_reliability.png}
+    \item \texttt{calibration\_metrics.json} (ECE values)
+\end{itemize}
+
+\textbf{Structured result outputs:}
+
+\begin{itemize}
+    \item Per-comparison summaries in \texttt{comparison\_results.json}
+    \item Benchmark summary exports in \texttt{benchmark\_summary.csv}, \texttt{benchmark\_summary.json}, and \texttt{benchmark\_matrix.md}
+\end{itemize}
+
+These outputs satisfy the project requirement to produce convergence graphs, per-class diagnostics, and report-ready comparison artifacts from a reproducible pipeline.
+
+\subsection{Lessons Learned}
+
+Three overarching lessons emerged from implementation:
+
+\begin{enumerate}
+    \item \textbf{Infrastructure Complexity is Underestimated:} GPU integration with containerization (D1) consumed more effort than algorithm implementation. Future projects of similar scope should allocate dedicated time for infrastructure validation and create verification scripts before committing to experiment timelines.
+
+    \item \textbf{Algorithm Implementation Requires Deep Domain Understanding:} Translating published algorithms to working code (D7, D9) demands understanding details not apparent from paper descriptions. Direct pseudocode translation is insufficient; empirical validation is essential.
+
+    \item \textbf{Algorithm Stability Depends on Label Budget:} Behaviour changes significantly between low-label and high-label regimes (D7). Under fixed settings, some methods remain robust while others become unstable.
+
+    \item \textbf{Pragmatic Scope Management is Essential:} The decision to implement 5 algorithms thoroughly rather than 10 partially reflected project realities. This principle---depth over breadth---is common in research projects with resource constraints and should be explicitly acknowledged in planning.
+\end{enumerate}
+
+\section{Conclusion}
+
+This chapter documented the implementation trajectory from design (Chapter~\ref{chap:des}) through completion, focusing on the selected key difficulties and their solutions. Relative to the broad original plan, the final delivered implementation is a focused and complete benchmarking framework with clearly verified outputs.
+
+\begin{itemize}
+    \item \textbf{Algorithms implemented:} Supervised, Pseudo-Label, FixMatch, MixMatch, FlexMatch
+    \item \textbf{Evaluation artifacts implemented:} learning curves, per-class comparisons, confusion matrices, reliability diagrams, and ECE summaries
+    \item \textbf{Experiment outputs implemented:} JSON/CSV/Markdown summaries suitable for downstream analysis and report integration
+    \item \textbf{Engineering baseline implemented:} reproducible configuration-driven execution with checkpointing, logging, and comparison scripts
+\end{itemize}
+
+The pragmatic decisions made (scope reduction, deferred full multi-seed coverage, single-dataset focus) reflect the core tension in applied research: breadth versus depth. The chosen approach prioritized implementation correctness and reliable comparison outputs over maximal algorithm count.
+
+Accordingly, Chapter~\ref{chap:eval} can build directly on a stable base where the implemented algorithms and implemented graphs are already aligned with the project's comparative evaluation goals.

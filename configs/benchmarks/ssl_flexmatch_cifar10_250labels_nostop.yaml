@@ -1,7 +1,7 @@
-﻿# MixMatch benchmark with validation-based stop-loss
+# FlexMatch benchmark with validation-based stop-loss
 # 250 total labels = 25 labels per class
 
-run_name: ssl_mixmatch_cifar10_250labels
+run_name: ssl_flexmatch_cifar10_250labels_nostop
 
 dataset:
   name: cifar10
@@ -29,7 +29,7 @@ training:
 
 ssl:
   enabled: true
-  algorithm: mixmatch
+  algorithm: flexmatch
   labels_per_class: 25
   label_fraction: null
   unlabeled_batch_size: 256
@@ -37,8 +37,6 @@ ssl:
   unlabeled_loss_weight: 1.0
   strong_augment: true
   temperature: 1.0
-  mixmatch_alpha: 0.75
-  mixmatch_temperature: 0.5
   seed: 42
 
 system:

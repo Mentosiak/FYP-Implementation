@@ -23,6 +23,8 @@ import yaml
 
 BEST_ACC_PATTERN = re.compile(r"Best Test Accuracy:\s*([0-9]+(?:\.[0-9]+)?)%")
 EPOCH_PATTERN = re.compile(r"Epoch\s*\[(\d+)/(\d+)\]")
+GPU_MEM_PATTERN = re.compile(r"GPU Mem Used:\s*([0-9]+(?:\.[0-9]+)?)\s*MiB")
+GPU_UTIL_PATTERN = re.compile(r"GPU Util:\s*([0-9]+(?:\.[0-9]+)?)%")
 
 
 @dataclass
@@ -37,6 +39,8 @@ class RunRecord:
     best_test_acc: float | None
     epochs_completed: int | None
     expected_epochs: int | None
+    peak_gpu_mem_used_mb: float | None
+    peak_gpu_util_pct: float | None
     comparison_dir: str | None
     comparison_file: str | None
     status: str
@@ -56,9 +60,11 @@ def latest_log_for_run(logs_root: Path, run_name: str) -> Path | None:
     return log_files[0] if log_files else None
 
 
-def parse_log_metrics(log_path: Path) -> tuple[float | None, int | None]:
+def parse_log_metrics(log_path: Path) -> tuple[float | None, int | None, float | None, float | None]:
     best_acc = None
     max_epoch = None
+    peak_gpu_mem = None
+    peak_gpu_util = None
     with log_path.open("r", encoding="utf-8", errors="ignore") as f:
         for line in f:
             best_match = BEST_ACC_PATTERN.search(line)
@@ -73,7 +79,19 @@ def parse_log_metrics(log_path: Path) -> tuple[float | None, int | None]:
                 if max_epoch is None or epoch_value > max_epoch:
                     max_epoch = epoch_value
 
-    return best_acc, max_epoch
+            mem_match = GPU_MEM_PATTERN.search(line)
+            if mem_match:
+                mem_value = float(mem_match.group(1))
+                if peak_gpu_mem is None or mem_value > peak_gpu_mem:
+                    peak_gpu_mem = mem_value
+
+            util_match = GPU_UTIL_PATTERN.search(line)
+            if util_match:
+                util_value = float(util_match.group(1))
+                if peak_gpu_util is None or util_value > peak_gpu_util:
+                    peak_gpu_util = util_value
+
+    return best_acc, max_epoch, peak_gpu_mem, peak_gpu_util
 
 
 def find_comparison_hits(comparison_root: Path) -> dict[tuple[str, str], tuple[str, str]]:
@@ -97,11 +115,31 @@ def find_comparison_hits(comparison_root: Path) -> dict[tuple[str, str], tuple[s
     return hits
 
 
-def detect_status(best_acc: float | None, best_ckpt_exists: bool) -> str:
+def detect_status(
+    best_acc: float | None,
+    best_ckpt_exists: bool,
+    epochs_completed: int | None,
+    expected_epochs: int | None,
+) -> str:
+    """Classify run status.
+
+    Notes:
+    - "complete" means the run appears to have reached the configured epoch budget.
+    - "partial" includes early-stopped runs that produced checkpoints/metrics but did not
+      reach the configured epoch budget.
+    """
     if best_acc is None and not best_ckpt_exists:
         return "missing"
+
     if best_acc is not None and best_ckpt_exists:
+        if (
+            isinstance(epochs_completed, int)
+            and isinstance(expected_epochs, int)
+            and epochs_completed < expected_epochs
+        ):
+            return "partial"
         return "complete"
+
     return "partial"
 
 
@@ -134,17 +172,17 @@ def build_record(
 
     latest_log = latest_log_for_run(logs_root, run_name)
     if latest_log is not None:
-        best_acc, epochs_completed = parse_log_metrics(latest_log)
+        best_acc, epochs_completed, peak_gpu_mem_used_mb, peak_gpu_util_pct = parse_log_metrics(latest_log)
         log_path_str = str(latest_log.as_posix())
     else:
-        best_acc, epochs_completed = None, None
+        best_acc, epochs_completed, peak_gpu_mem_used_mb, peak_gpu_util_pct = None, None, None, None
         log_path_str = None
 
     best_ckpt = checkpoints_root / run_name / f"{run_name}_best.pt"
     best_ckpt_exists = best_ckpt.exists()
     best_ckpt_str = str(best_ckpt.as_posix()) if best_ckpt_exists else None
 
-    status = detect_status(best_acc, best_ckpt_exists)
+    status = detect_status(best_acc, best_ckpt_exists, epochs_completed, expected_epochs)
     notes = ""
 
     if algorithm == "mixmatch" and labels_total == 250 and best_acc is not None and best_acc < 40.0:
@@ -175,6 +213,8 @@ def build_record(
         best_test_acc=best_acc,
         epochs_completed=epochs_completed,
         expected_epochs=expected_epochs,
+        peak_gpu_mem_used_mb=peak_gpu_mem_used_mb,
+        peak_gpu_util_pct=peak_gpu_util_pct,
         comparison_dir=comparison_dir,
         comparison_file=comparison_file,
         status=status,
@@ -192,6 +232,8 @@ def write_csv(records: list[RunRecord], path: Path) -> None:
         "best_test_acc",
         "epochs_completed",
         "expected_epochs",
+        "peak_gpu_mem_used_mb",
+        "peak_gpu_util_pct",
         "status",
         "notes",
         "log_path",
@@ -213,6 +255,8 @@ def write_csv(records: list[RunRecord], path: Path) -> None:
                     "best_test_acc": r.best_test_acc,
                     "epochs_completed": r.epochs_completed,
                     "expected_epochs": r.expected_epochs,
+                    "peak_gpu_mem_used_mb": r.peak_gpu_mem_used_mb,
+                    "peak_gpu_util_pct": r.peak_gpu_util_pct,
                     "status": r.status,
                     "notes": r.notes,
                     "log_path": r.log_path,

@@ -21,6 +21,10 @@ training:
   momentum: 0.9
   weight_decay: 0.0005
   warmup_epochs: 0
+  supervised_algorithm: standard  # standard, mixup, or cutmix
+  mixup_alpha: 0.2
+  cutmix_alpha: 1.0
+  cutmix_prob: 0.5
   save_best: true
   save_last: true
 

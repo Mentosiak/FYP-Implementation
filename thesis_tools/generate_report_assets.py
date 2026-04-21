@@ -47,6 +47,8 @@ def _build_main_table(rows: list[dict[str, str]]) -> list[dict[str, str]]:
             continue
         table.append(
             {
+                "run_name": row.get("run_name", ""),
+                "config_path": row.get("config_path", ""),
                 "algorithm": algorithm,
                 "labels_total": labels_total,
                 "best_test_acc": row.get("best_test_acc", ""),
@@ -71,14 +73,52 @@ def _write_csv(path: Path, rows: list[dict[str, str]], fieldnames: list[str]) ->
 
 
 def _write_latex_accuracy_table(path: Path, rows: list[dict[str, str]]) -> None:
-    matrix: dict[tuple[str, int], str] = {}
+    by_key: dict[tuple[str, int], list[dict[str, str]]] = defaultdict(list)
     for r in rows:
-        acc = r["best_test_acc"] if r["best_test_acc"] else "-"
-        status = r["status"]
-        cell = f"{acc}" if acc == "-" else f"{acc}\\%"
+        by_key[(r["algorithm"], int(r["labels_total"]))].append(r)
+
+    def _status_score(status: str) -> int:
+        if status == "complete":
+            return 3
+        if status == "partial":
+            return 2
+        if status == "missing":
+            return 1
+        return 0
+
+    def _progress_ratio(r: dict[str, str]) -> float:
+        completed = _to_float(r.get("epochs_completed", ""))
+        expected = _to_float(r.get("expected_epochs", ""))
+        if completed is None or expected is None or expected == 0:
+            return 0.0
+        return completed / expected
+
+    def _pick_best(rows_for_key: list[dict[str, str]]) -> dict[str, str]:
+        def _rank(r: dict[str, str]) -> tuple[int, float, float]:
+            status = r.get("status", "")
+            status_score = _status_score(status)
+            acc = _to_float(r.get("best_test_acc", ""))
+            acc_score = acc if acc is not None else float("-inf")
+            progress = _progress_ratio(r)
+            return (status_score, acc_score, progress)
+
+        return max(rows_for_key, key=_rank)
+
+    matrix: dict[tuple[str, int], str] = {}
+    for key, candidates in by_key.items():
+        r = _pick_best(candidates)
+        status = r.get("status", "")
+        acc = r.get("best_test_acc", "")
+
+        if acc:
+            cell = f"{acc}\\%"
+        else:
+            cell = "-"
+
         if status != "complete":
             cell = f"{cell} ({status})"
-        matrix[(r["algorithm"], int(r["labels_total"]))] = cell
+
+        matrix[key] = cell
 
     algorithms = ["supervised", "pseudolabel", "fixmatch", "mixmatch", "flexmatch"]
     labels = [250, 1000, 4000]
@@ -117,7 +157,7 @@ def _write_gap_report(path: Path, rows: list[dict[str, str]]) -> None:
             lines.append("")
             for r in sorted(by_label[label], key=lambda x: x["algorithm"]):
                 lines.append(
-                    f"- {r['algorithm']}: status={r['status']}, best_acc={r['best_test_acc'] or '-'}, note={r['notes'] or '-'}"
+                    f"- {r['run_name'] or r['algorithm']}: status={r['status']}, best_acc={r['best_test_acc'] or '-'}, note={r['notes'] or '-'}"
                 )
             lines.append("")
 
@@ -150,6 +190,8 @@ def main() -> None:
         out_root / "accuracy_main_table.csv",
         main_rows,
         [
+            "run_name",
+            "config_path",
             "algorithm",
             "labels_total",
             "best_test_acc",

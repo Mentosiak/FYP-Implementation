@@ -16,7 +16,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
-from .trainer_utils import should_trigger_stop_loss
+from .trainer_utils import ensure_history_lists, get_gpu_epoch_metrics, should_trigger_stop_loss
 
 
 class FixMatchTrainer:
@@ -83,7 +83,10 @@ class FixMatchTrainer:
             'pseudo_label_ratio': [],
             'epoch_time': [],
             'per_class_acc': [],
+            'gpu_mem_used_mb': [],
+            'gpu_util_pct': [],
         }
+        ensure_history_lists(self.history, ['gpu_mem_used_mb', 'gpu_util_pct'])
 
         self.best_acc = 0.0
         self.best_val_loss = float('inf')
@@ -131,6 +134,7 @@ class FixMatchTrainer:
             self.best_val_loss = checkpoint['best_val_loss']
         if 'history' in checkpoint:
             self.history = checkpoint['history']
+            ensure_history_lists(self.history, ['gpu_mem_used_mb', 'gpu_util_pct'])
 
         start_epoch = checkpoint.get('epoch', 0) + 1
         self.logger.info("Loaded checkpoint from epoch %d", checkpoint.get('epoch', 0))
@@ -293,6 +297,7 @@ class FixMatchTrainer:
             self.scheduler.step()
 
             epoch_time = time.time() - start_time
+            gpu_mem_used_mb, gpu_util_pct = get_gpu_epoch_metrics(self.device)
 
             self.history['train_loss'].append(train_loss)
             self.history['labeled_loss'].append(labeled_loss)
@@ -305,6 +310,8 @@ class FixMatchTrainer:
             self.history['pseudo_label_ratio'].append(pseudo_ratio)
             self.history['per_class_acc'].append(per_class_acc)
             self.history['epoch_time'].append(epoch_time)
+            self.history['gpu_mem_used_mb'].append(gpu_mem_used_mb)
+            self.history['gpu_util_pct'].append(gpu_util_pct)
             last_completed_epoch = epoch
 
             is_best = False
@@ -337,14 +344,18 @@ class FixMatchTrainer:
                 break
 
             current_lr = self.optimizer.param_groups[0]['lr']
+            gpu_mem_str = f"{gpu_mem_used_mb:.0f} MiB" if gpu_mem_used_mb is not None else "n/a"
+            gpu_util_str = f"{gpu_util_pct:.0f}%" if gpu_util_pct is not None else "n/a"
             if val_loss is not None and val_acc is not None:
                 self.logger.info(
-                    "Epoch [%d/%d] | Time: %.1fs | LR: %.6f | Train Loss: %.4f | Train Acc: %.2f%% | "
+                    "Epoch [%d/%d] | Time: %.1fs | GPU Mem Used: %s | GPU Util: %s | LR: %.6f | Train Loss: %.4f | Train Acc: %.2f%% | "
                     "Val Loss: %.4f | Val Acc: %.2f%% | Test Loss: %.4f | Test Acc: %.2f%% | "
                     "Pseudo Ratio: %.2f%% | Best (val): %.4f",
                     epoch + 1,
                     num_epochs,
                     epoch_time,
+                    gpu_mem_str,
+                    gpu_util_str,
                     current_lr,
                     train_loss,
                     train_acc,
@@ -357,11 +368,13 @@ class FixMatchTrainer:
                 )
             else:
                 self.logger.info(
-                    "Epoch [%d/%d] | Time: %.1fs | LR: %.6f | Train Loss: %.4f | Train Acc: %.2f%% | "
+                    "Epoch [%d/%d] | Time: %.1fs | GPU Mem Used: %s | GPU Util: %s | LR: %.6f | Train Loss: %.4f | Train Acc: %.2f%% | "
                     "Test Loss: %.4f | Test Acc: %.2f%% | Pseudo Ratio: %.2f%% | Best: %.2f%%",
                     epoch + 1,
                     num_epochs,
                     epoch_time,
+                    gpu_mem_str,
+                    gpu_util_str,
                     current_lr,
                     train_loss,
                     train_acc,

@@ -11,7 +11,7 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 
-from .trainer_utils import should_trigger_stop_loss
+from .trainer_utils import ensure_history_lists, get_gpu_epoch_metrics, should_trigger_stop_loss
 
 
 class SupervisedTrainer:
@@ -39,6 +39,8 @@ class SupervisedTrainer:
         stop_loss_warmup_epochs: int = 12,
         supervised_algorithm: str = 'standard',
         mixup_alpha: float = 0.2,
+        cutmix_alpha: float = 1.0,
+        cutmix_prob: float = 0.5,
         total_epochs: int = 200,
     ):
         """
@@ -61,8 +63,10 @@ class SupervisedTrainer:
             num_classes: Number of classes
             stop_loss_threshold: Stop training when monitored loss exceeds this threshold
             stop_loss_warmup_epochs: Ignore stop-loss check during first N epochs
-            supervised_algorithm: Training algorithm ('standard' or 'mixup')
+            supervised_algorithm: Training algorithm ('standard', 'mixup', or 'cutmix')
             mixup_alpha: Mixup beta distribution alpha
+            cutmix_alpha: CutMix beta distribution alpha
+            cutmix_prob: Probability of applying CutMix to a batch
             total_epochs: Total planned epochs (used for scheduler horizon)
         """
         self.model = model.to(device)
@@ -80,6 +84,8 @@ class SupervisedTrainer:
         self.stop_loss_warmup_epochs = max(0, stop_loss_warmup_epochs)
         self.supervised_algorithm = supervised_algorithm.lower()
         self.mixup_alpha = mixup_alpha
+        self.cutmix_alpha = cutmix_alpha
+        self.cutmix_prob = cutmix_prob
         
         # Loss function
         self.criterion = nn.CrossEntropyLoss()
@@ -106,8 +112,11 @@ class SupervisedTrainer:
             'test_loss': [],
             'test_acc': [],
             'per_class_acc': [],
-            'epoch_time': []
+            'epoch_time': [],
+            'gpu_mem_used_mb': [],
+            'gpu_util_pct': [],
         }
+        ensure_history_lists(self.history, ['gpu_mem_used_mb', 'gpu_util_pct'])
 
         self.best_acc = 0.0
         self.best_val_loss = float('inf')
@@ -128,6 +137,43 @@ class SupervisedTrainer:
     def _mixup_criterion(self, outputs, targets_a, targets_b, lam: float):
         """Compute mixup loss as convex combination of CE losses."""
         return lam * self.criterion(outputs, targets_a) + (1.0 - lam) * self.criterion(outputs, targets_b)
+
+    def _rand_bbox(self, height: int, width: int, lam: float):
+        """Sample a CutMix bounding box."""
+        cut_ratio = float(np.sqrt(max(0.0, 1.0 - lam)))
+        cut_height = int(height * cut_ratio)
+        cut_width = int(width * cut_ratio)
+
+        center_y = int(np.random.randint(height))
+        center_x = int(np.random.randint(width))
+
+        y1 = max(0, center_y - cut_height // 2)
+        y2 = min(height, center_y + cut_height // 2)
+        x1 = max(0, center_x - cut_width // 2)
+        x2 = min(width, center_x + cut_width // 2)
+        return y1, y2, x1, x2
+
+    def _cutmix_batch(self, inputs: torch.Tensor, targets: torch.Tensor):
+        """Apply CutMix augmentation to a labeled batch."""
+        if self.cutmix_alpha <= 0.0 or self.cutmix_prob <= 0.0:
+            return inputs, targets, targets, 1.0
+
+        if float(np.random.rand()) > self.cutmix_prob:
+            return inputs, targets, targets, 1.0
+
+        lambda_value = float(np.random.beta(self.cutmix_alpha, self.cutmix_alpha))
+        permuted_indices = torch.randperm(inputs.size(0), device=inputs.device)
+
+        mixed_inputs = inputs.clone()
+        _, _, height, width = inputs.size()
+        y1, y2, x1, x2 = self._rand_bbox(height, width, lambda_value)
+        mixed_inputs[:, :, y1:y2, x1:x2] = inputs[permuted_indices, :, y1:y2, x1:x2]
+
+        box_area = (y2 - y1) * (x2 - x1)
+        lambda_value = 1.0 - box_area / float(height * width)
+        targets_a = targets
+        targets_b = targets[permuted_indices]
+        return mixed_inputs, targets_a, targets_b, lambda_value
 
     def _save_checkpoint(self, epoch: int, is_best: bool = False, is_last: bool = False):
         """Save model checkpoint."""
@@ -183,6 +229,7 @@ class SupervisedTrainer:
         
         if 'history' in checkpoint:
             self.history = checkpoint['history']
+            ensure_history_lists(self.history, ['gpu_mem_used_mb', 'gpu_util_pct'])
         
         start_epoch = checkpoint.get('epoch', 0) + 1
         self.logger.info(f"Loaded checkpoint from epoch {checkpoint.get('epoch', 0)}")
@@ -204,6 +251,13 @@ class SupervisedTrainer:
             self.optimizer.zero_grad()
             if self.supervised_algorithm == 'mixup':
                 mixed_inputs, targets_a, targets_b, lam = self._mixup_batch(inputs, targets)
+                outputs = self.model(mixed_inputs)
+                loss = self._mixup_criterion(outputs, targets_a, targets_b, lam)
+                with torch.no_grad():
+                    clean_outputs = self.model(inputs)
+                    _, predicted = clean_outputs.max(1)
+            elif self.supervised_algorithm == 'cutmix':
+                mixed_inputs, targets_a, targets_b, lam = self._cutmix_batch(inputs, targets)
                 outputs = self.model(mixed_inputs)
                 loss = self._mixup_criterion(outputs, targets_a, targets_b, lam)
                 with torch.no_grad():
@@ -310,6 +364,9 @@ class SupervisedTrainer:
         self.logger.info("Supervised algorithm: %s", self.supervised_algorithm)
         if self.supervised_algorithm == 'mixup':
             self.logger.info("Mixup alpha: %.3f", self.mixup_alpha)
+        if self.supervised_algorithm == 'cutmix':
+            self.logger.info("CutMix alpha: %.3f", self.cutmix_alpha)
+            self.logger.info("CutMix probability: %.3f", self.cutmix_prob)
         if self.stop_loss_threshold is not None:
             self.logger.info(
                 "Stop-loss threshold: %.4f (active after epoch %d)",
@@ -340,6 +397,7 @@ class SupervisedTrainer:
             
             # Track time
             epoch_time = time.time() - start_time
+            gpu_mem_used_mb, gpu_util_pct = get_gpu_epoch_metrics(self.device)
             
             # Save history
             self.history['train_loss'].append(train_loss)
@@ -350,6 +408,8 @@ class SupervisedTrainer:
             self.history['test_acc'].append(test_acc)
             self.history['per_class_acc'].append(per_class_acc)
             self.history['epoch_time'].append(epoch_time)
+            self.history['gpu_mem_used_mb'].append(gpu_mem_used_mb)
+            self.history['gpu_util_pct'].append(gpu_util_pct)
             last_completed_epoch = epoch
             
             # Check if best model (prefer lowest validation loss if available)
@@ -384,10 +444,14 @@ class SupervisedTrainer:
             
             # Logging
             current_lr = self.optimizer.param_groups[0]['lr']
+            gpu_mem_str = f"{gpu_mem_used_mb:.0f} MiB" if gpu_mem_used_mb is not None else "n/a"
+            gpu_util_str = f"{gpu_util_pct:.0f}%" if gpu_util_pct is not None else "n/a"
             if val_loss is not None and val_acc is not None:
                 self.logger.info(
                     f"Epoch [{epoch+1}/{num_epochs}] | "
                     f"Time: {epoch_time:.1f}s | "
+                    f"GPU Mem Used: {gpu_mem_str} | "
+                    f"GPU Util: {gpu_util_str} | "
                     f"LR: {current_lr:.6f} | "
                     f"Train Loss: {train_loss:.4f} | "
                     f"Train Acc: {train_acc:.2f}% | "
@@ -401,6 +465,8 @@ class SupervisedTrainer:
                 self.logger.info(
                     f"Epoch [{epoch+1}/{num_epochs}] | "
                     f"Time: {epoch_time:.1f}s | "
+                    f"GPU Mem Used: {gpu_mem_str} | "
+                    f"GPU Util: {gpu_util_str} | "
                     f"LR: {current_lr:.6f} | "
                     f"Train Loss: {train_loss:.4f} | "
                     f"Train Acc: {train_acc:.2f}% | "

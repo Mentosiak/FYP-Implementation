@@ -41,6 +41,15 @@ def parse_args():
                         help='SGD momentum')
     parser.add_argument('--weight-decay', type=float, default=5e-4,
                         help='Weight decay')
+    parser.add_argument('--supervised-algorithm', type=str, default='standard',
+                        choices=['standard', 'mixup', 'cutmix'],
+                        help='Supervised training variant')
+    parser.add_argument('--mixup-alpha', type=float, default=0.2,
+                        help='Mixup beta distribution alpha')
+    parser.add_argument('--cutmix-alpha', type=float, default=1.0,
+                        help='CutMix beta distribution alpha')
+    parser.add_argument('--cutmix-prob', type=float, default=0.5,
+                        help='Probability of applying CutMix to a batch')
     
     # System
     parser.add_argument('--seed', type=int, default=42,
@@ -127,8 +136,10 @@ def main():
         run_name=run_name,
         logger=logger,
         stop_loss_warmup_epochs=12,
-        supervised_algorithm='standard',
-        mixup_alpha=0.2,
+        supervised_algorithm=args.supervised_algorithm,
+        mixup_alpha=args.mixup_alpha,
+        cutmix_alpha=args.cutmix_alpha,
+        cutmix_prob=args.cutmix_prob,
         total_epochs=args.epochs,
     )
     

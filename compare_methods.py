@@ -130,6 +130,8 @@ def train_or_load_supervised(config, device, logger, checkpoint_dir, force_train
         stop_loss_warmup_epochs=config.training.stop_loss_warmup_epochs,
         supervised_algorithm=config.training.supervised_algorithm,
         mixup_alpha=config.training.mixup_alpha,
+        cutmix_alpha=config.training.cutmix_alpha,
+        cutmix_prob=config.training.cutmix_prob,
         total_epochs=config.training.epochs,
     )
     

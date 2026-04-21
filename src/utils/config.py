@@ -39,8 +39,10 @@ class TrainingConfig:
     validation_split: float = 0.0
     stop_loss_threshold: float | None = None
     stop_loss_warmup_epochs: int = 12
-    supervised_algorithm: str = "standard"  # standard or mixup
+    supervised_algorithm: str = "standard"  # standard, mixup, or cutmix
     mixup_alpha: float = 0.2
+    cutmix_alpha: float = 1.0
+    cutmix_prob: float = 0.5
     save_best: bool = True
     save_last: bool = True
 
@@ -156,6 +158,8 @@ class ExperimentConfig:
                 'stop_loss_warmup_epochs': self.training.stop_loss_warmup_epochs,
                 'supervised_algorithm': self.training.supervised_algorithm,
                 'mixup_alpha': self.training.mixup_alpha,
+                'cutmix_alpha': self.training.cutmix_alpha,
+                'cutmix_prob': self.training.cutmix_prob,
                 'save_best': self.training.save_best,
                 'save_last': self.training.save_last,
             },
