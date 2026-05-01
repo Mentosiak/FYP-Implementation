@@ -6,10 +6,14 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+import yaml
 
 ROOT = Path(__file__).resolve().parent
 BENCHMARK_DIR = ROOT / "configs" / "benchmarks"
+CACHE_DIR = ROOT / ".launch_cache"
 IMAGE_NAME = "fyp-ssl:latest"
 CONTAINER_WORKDIR = "/workspace"
 
@@ -21,12 +25,13 @@ DISPLAY_NAMES = {
     "fixmatch": "FixMatch",
     "mixmatch": "MixMatch",
     "flexmatch": "FlexMatch",
-    "40labels": "40",
-    "250labels": "250",
-    "1000labels": "1000",
-    "4000labels": "4000",
-    "1percent_val": "1 Percent Val",
+    "resnet18": "ResNet-18",
+    "resnet34": "ResNet-34",
+    "wideresnet": "WideResNet-28-2",
 }
+
+BACKBONES = ["resnet18", "resnet34", "wideresnet"]
+CANONICAL_SPLITS = {"250labels", "1000labels", "4000labels"}
 
 TRAINERS = {
     "supervised": "train_supervised_limited.py",
@@ -57,11 +62,25 @@ def display_name(value: str) -> str:
     return DISPLAY_NAMES.get(value, value.replace("_", " ").title())
 
 
-def ask_choice(prompt: str, options: list[str]) -> str:
+def split_summary(split: str) -> str:
+    if not split.endswith("labels"):
+        return display_name(split)
+
+    try:
+        labeled_total = int(split.removesuffix("labels"))
+    except ValueError:
+        return display_name(split)
+
+    labeled_pct = labeled_total / 50000 * 100
+    unlabeled_pct = 100 - labeled_pct
+    return f"{labeled_total} labels total ({labeled_pct:.2f}% labeled / {unlabeled_pct:.2f}% unlabeled)"
+
+
+def ask_choice(prompt: str, options: list[str], formatter=display_name) -> str:
     print()
     print(prompt)
     for index, option in enumerate(options, start=1):
-        print(f"[{index}] {display_name(option)}")
+        print(f"[{index}] {formatter(option)}")
 
     while True:
         answer = input("Enter a number: ").strip()
@@ -99,6 +118,7 @@ def build_parser(runs: dict[tuple[str, str, str], Path]) -> argparse.ArgumentPar
     parser = argparse.ArgumentParser(description="Launch a benchmark run in Docker")
     parser.add_argument("--dataset", choices=datasets, help="Dataset to run")
     parser.add_argument("--algorithm", choices=algorithms, help="Algorithm to run")
+    parser.add_argument("--backbone", choices=BACKBONES, help="Model backbone to use")
     parser.add_argument("--split", help="Benchmark split to use")
     parser.add_argument("--image", default=IMAGE_NAME, help="Docker image to run")
     parser.add_argument("--dry-run", action="store_true", help="Print the Docker command without running it")
@@ -115,15 +135,34 @@ def choose_run(runs: dict[tuple[str, str, str], Path], args: argparse.Namespace)
     if not args.algorithm:
         args.algorithm = ask_choice("What Algorithm would you like to train?", available_algorithms)
 
+    available_backbones = list(BACKBONES)
+    if not args.backbone:
+        args.backbone = ask_choice("What Backbone would you like to use?", available_backbones)
+
     available_splits = sorted(
-        split for dataset, algorithm, split in runs if dataset == args.dataset and algorithm == args.algorithm
+        split
+        for dataset, algorithm, split in runs
+        if dataset == args.dataset and algorithm == args.algorithm and split in CANONICAL_SPLITS
     )
     if not available_splits:
         raise SystemExit(f"No benchmark splits found for dataset={args.dataset!r} and algorithm={args.algorithm!r}")
     if not args.split:
-        args.split = ask_choice("What Data Split?", available_splits)
+        args.split = ask_choice("What Data Split would you like to use?", available_splits, formatter=split_summary)
 
-    return args.dataset, args.algorithm, args.split
+    return args.dataset, args.algorithm, args.backbone, args.split
+
+
+def write_launch_config(source_path: Path, backbone: str, dataset: str, algorithm: str, split: str) -> Path:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    with source_path.open("r", encoding="utf-8") as handle:
+        config_data = yaml.safe_load(handle)
+    config_data["model"]["architecture"] = backbone
+
+    launch_name = f"{dataset}_{algorithm}_{split}_{backbone}.yaml"
+    launch_path = CACHE_DIR / launch_name
+    with launch_path.open("w", encoding="utf-8") as handle:
+        yaml.safe_dump(config_data, handle, sort_keys=False)
+    return launch_path
 
 
 def main() -> int:
@@ -135,14 +174,17 @@ def main() -> int:
         print()
         print("Available runs:")
         for dataset, algorithm, split in sorted(runs):
-            print(f"  {display_name(dataset):10}  {display_name(algorithm):11}  {display_name(split)}")
+            if split not in CANONICAL_SPLITS:
+                continue
+            print(f"  {display_name(dataset):10}  {display_name(algorithm):11}  {split_summary(split)}")
         return 0
 
-    dataset, algorithm, split = choose_run(runs, args)
+    dataset, algorithm, backbone, split = choose_run(runs, args)
     config_path = runs.get((dataset, algorithm, split))
     if config_path is None:
         raise SystemExit(f"No benchmark config found for dataset={dataset!r}, algorithm={algorithm!r}, split={split!r}")
 
+    launch_config = write_launch_config(config_path, backbone, dataset, algorithm, split)
     use_gpu = ask_yes_no("Use GPU?", default=True)
     if not extra_args:
         extra_args = ask_extra_args()
@@ -156,8 +198,6 @@ def main() -> int:
         "docker",
         "run",
         "--rm",
-        "--name",
-        f"{algorithm}_{split}",
         "-v",
         f"{ROOT}:{CONTAINER_WORKDIR}",
         "-w",
@@ -170,10 +210,16 @@ def main() -> int:
         "python",
         trainer_script,
         "--config",
-        config_path.relative_to(ROOT).as_posix(),
+        launch_config.relative_to(ROOT).as_posix(),
         *extra_args,
     ])
 
+    print()
+    print("Selected:")
+    print(f"  Dataset:  {display_name(dataset)}")
+    print(f"  Algorithm:{' ' if len(algorithm) < 9 else ''}{display_name(algorithm)}")
+    print(f"  Backbone: {display_name(backbone)}")
+    print(f"  Split:    {split_summary(split)}")
     print()
     print("Running:")
     print(" ".join(command))

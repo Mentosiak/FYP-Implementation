@@ -1,5 +1,5 @@
-# Base image with CUDA + cuDNN (adjust versions to your driver)
-FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+# Base image with CUDA + cuDNN
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
 # Non-interactive mode
 ENV DEBIAN_FRONTEND=noninteractive
@@ -26,5 +26,4 @@ RUN pip install --upgrade pip && \
 # Copy the rest of the project
 COPY . .
 
-# Default command: bash shell
 CMD ["/bin/bash"]
