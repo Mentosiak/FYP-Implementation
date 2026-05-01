@@ -271,25 +271,22 @@ class PseudoLabelTrainer:
             outputs_labeled = self.model(inputs_labeled)
             loss_labeled = self.criterion(outputs_labeled, targets_labeled)
             
-            # === Unlabeled loss (pseudo-labeling) ===
-            # Generate pseudo-labels using weak augmentation
+            # === Unlabeled loss (classic Pseudo-Labeling: Lee 2013) ===
+            # Classic Pseudo-Label (Lee 2013) assigns each unlabeled example
+            # a hard pseudo-label equal to argmax(model(x)) and trains on
+            # those pseudo-labels as if they were true labels. We follow the
+            # original approach here: use argmax pseudo-labels for ALL
+            # unlabeled samples (no confidence masking), and compute the
+            # unlabeled cross-entropy on the same inputs used to generate
+            # the labels.
             with torch.no_grad():
                 logits_unlabeled = self.model(inputs_unlabeled_weak)
-                probs_unlabeled = self._sharpen_predictions(logits_unlabeled)
-                max_probs, pseudo_labels = torch.max(probs_unlabeled, dim=1)
-                
-                # Create mask for high-confidence predictions
-                confidence_mask = max_probs >= self.confidence_threshold
-            
-            # Calculate loss on strong augmentation for high-confidence samples
-            if confidence_mask.sum() > 0:
-                outputs_unlabeled_strong = self.model(inputs_unlabeled_strong)
-                loss_unlabeled = self.criterion(
-                    outputs_unlabeled_strong[confidence_mask],
-                    pseudo_labels[confidence_mask]
-                )
-            else:
-                loss_unlabeled = torch.tensor(0.0).to(self.device)
+                probs_unlabeled = F.softmax(logits_unlabeled, dim=1)
+                _, pseudo_labels = torch.max(probs_unlabeled, dim=1)
+
+            # Compute unlabeled loss using the same (weak) inputs
+            outputs_unlabeled = self.model(inputs_unlabeled_weak)
+            loss_unlabeled = self.criterion(outputs_unlabeled, pseudo_labels)
             
             # Combined loss
             loss = loss_labeled + self.unlabeled_loss_weight * loss_unlabeled
@@ -307,9 +304,9 @@ class PseudoLabelTrainer:
             total += targets_labeled.size(0)
             correct += predicted.eq(targets_labeled).sum().item()
             
-            # Pseudo-label metrics
-            pseudo_label_count += confidence_mask.sum().item()
-            unlabeled_total += confidence_mask.size(0)
+            # Pseudo-label metrics (classic: all unlabeled used)
+            pseudo_label_count += pseudo_labels.size(0)
+            unlabeled_total += pseudo_labels.size(0)
         
         # Calculate epoch metrics
         epoch_loss = total_loss_sum / num_iterations

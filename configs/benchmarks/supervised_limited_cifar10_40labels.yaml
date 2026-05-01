@@ -1,7 +1,7 @@
-# Pseudo-Label benchmark aligned to standard CIFAR-10 SSL protocol
+# Supervised limited-label benchmark aligned to standard CIFAR-10 SSL protocol
 # 250 total labels = 25 labels per class
 
-run_name: ssl_pseudolabel_cifar10_250labels
+run_name: supervised_limited_cifar10_40labels
 
 dataset:
   name: cifar10
@@ -21,22 +21,17 @@ training:
   momentum: 0.9
   weight_decay: 0.0005
   warmup_epochs: 0
-  validation_split: 0.1
-  stop_loss_threshold: 999.0
+  validation_split: 0.0
+  stop_loss_threshold: null
   stop_loss_warmup_epochs: 12
+  supervised_algorithm: mixup
+  mixup_alpha: 0.2
   save_best: true
   save_last: true
 
 ssl:
-  enabled: true
-  algorithm: pseudolabel
-  labels_per_class: 25
-  label_fraction: null
-  unlabeled_batch_size: 256
-  confidence_threshold: 0.95
-  unlabeled_loss_weight: 1.0
-  strong_augment: true
-  temperature: 1.0
+  enabled: false
+  labels_per_class: 4
   seed: 42
 
 system:
@@ -46,3 +41,4 @@ system:
   checkpoint_dir: checkpoints
   log_dir: logs
   experiment_dir: experiments
+
