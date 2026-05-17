@@ -104,6 +104,16 @@ def ask_yes_no(prompt: str, default: bool = False) -> bool:
         print("Please answer y or n.")
 
 
+def ask_epochs() -> int | None:
+    while True:
+        raw = input("Number of epochs to train (press Enter for default): ").strip()
+        if not raw:
+            return None
+        if raw.isdigit() and int(raw) > 0:
+            return int(raw)
+        print("Please enter a positive integer or press Enter to skip.")
+
+
 def ask_extra_args() -> list[str]:
     raw = input("Extra training args (optional, press Enter to skip): ").strip()
     if not raw:
@@ -120,6 +130,7 @@ def build_parser(runs: dict[tuple[str, str, str], Path]) -> argparse.ArgumentPar
     parser.add_argument("--algorithm", choices=algorithms, help="Algorithm to run")
     parser.add_argument("--backbone", choices=BACKBONES, help="Model backbone to use")
     parser.add_argument("--split", help="Benchmark split to use")
+    parser.add_argument("--epochs", type=int, help="Number of epochs to train for")
     parser.add_argument("--image", default=IMAGE_NAME, help="Docker image to run")
     parser.add_argument("--dry-run", action="store_true", help="Print the Docker command without running it")
     parser.add_argument("--list", action="store_true", help="Show available runs and exit")
@@ -186,6 +197,11 @@ def main() -> int:
 
     launch_config = write_launch_config(config_path, backbone, dataset, algorithm, split)
     use_gpu = ask_yes_no("Use GPU?", default=True)
+    
+    # Ask for epochs if not provided via CLI
+    if args.epochs is None:
+        args.epochs = ask_epochs()
+    
     if not extra_args:
         extra_args = ask_extra_args()
 
@@ -211,8 +227,10 @@ def main() -> int:
         trainer_script,
         "--config",
         launch_config.relative_to(ROOT).as_posix(),
-        *extra_args,
     ])
+    if args.epochs is not None:
+        command.extend(["--epochs", str(args.epochs)])
+    command.extend(extra_args)
 
     print()
     print("Selected:")
@@ -220,6 +238,8 @@ def main() -> int:
     print(f"  Algorithm:{' ' if len(algorithm) < 9 else ''}{display_name(algorithm)}")
     print(f"  Backbone: {display_name(backbone)}")
     print(f"  Split:    {split_summary(split)}")
+    if args.epochs is not None:
+        print(f"  Epochs:   {args.epochs}")
     print()
     print("Running:")
     print(" ".join(command))
